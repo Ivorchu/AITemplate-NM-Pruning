@@ -27,11 +27,12 @@ import jinja2
 
 from aitemplate.backend.backend_spec import CUDASpec
 
-from aitemplate.backend.common import gemm_common, tensor_accessor_codegen
+from aitemplate.backend.common import gemm_sparse_common, tensor_accessor_codegen
 from aitemplate.backend.target import Target
 
-from aitemplate.compiler.base import IntImm
+from aitemplate.compiler.base import IntImm, ExecItem
 from aitemplate.utils import alignment
+
 
 # pylint: disable=C0301,C0415,R1705
 
@@ -138,6 +139,12 @@ using {{name}} = cutlass::gemm::device::GemmUniversalAdapter<{{config_name}}>;
 """
 )
 
+INSTANCE_TEMPLATE_SPARSE = jinja2.Template("""
+{{config}}
+using {{name}} = cutlass::gemm::device::GemmSparse<{{config_name}}>;
+""")
+
+
 SRC_TEMPLATE = jinja2.Template(
     """
 #include <iostream>
@@ -216,6 +223,7 @@ void {{function_name}} (
   {{shape_eval}}
   {{input_addr_calculator}}
   {{output_addr_calculator}}
+  {{metadata_code}}
   {{extra_shape}}
   {{input_output_checks}}
 
@@ -439,12 +447,15 @@ int benchmark_{{function_name}} (
     cutlass::gemm::GemmCoord* problem_sizes_device,
     void **ptr_A,
     void **ptr_B,
-    void **ptr_C,
+    void **ptr_M,
+    int64_t *meta_stride,
 {% if has_bias %}
     void **ptr_bias,
 {% endif %}
+    void **ptr_C,
     int64_t* lda,
     int64_t* ldb,
+    int64_t* ldm,
     int64_t* ldc,
 {% if has_bias %}
     int64_t* ldd,
@@ -461,11 +472,23 @@ int benchmark_{{function_name}} (
 {% if support_split_k %}
     int split_k,
 {% endif %}
+
+// raw pointers
+void** ptr_A,                // A values
+void** ptr_B,                // B values
+void** ptr_M,                // B metadata
+int64_t* meta_stride,        // metadata stride
+{% if has_bias %}void** ptr_bias,{% endif %}
+void** ptr_C,                // output
+
 {% for idx in range(input_ndims) %}
     int64_t* a_dim{{idx}},
 {% endfor %}
 {% for idx in range(weight_ndims) %}
     int64_t* b_dim{{idx}},
+{% endfor %}
+{% for idx in range(meta_ndims) %}
+    int64_t* m_dim{{idx}},
 {% endfor %}
 {% for idx in range(output_ndims) %}
     int64_t* c_dim{{idx}},
@@ -801,7 +824,7 @@ def sparse_gemm_instance(
 
     op_def = update_alignments_in_gemm_instance(op_def, func_attrs, for_profiler)
     tmp = op_def.replace(
-        "cutlass::gemm::device::Gemm", "cutlass::gemm::device::GemmUniversal"
+        "cutlass::gemm::device::Gemm", "cutlass::gemm::device::GemmSparse"
     )
     tmp = tmp.replace("false,", "")
     return tmp
@@ -952,9 +975,12 @@ def gen_function(
             inst_def_flag.add(algo)
         else:
             config = ""
-        instance_template = (
-            INSTANCE_TEMPLATE_CUTLASS_3X if cutlass_3x else INSTANCE_TEMPLATE
-        )
+        if "sp_tensorop" in algo:
+            instance_template = INSTANCE_TEMPLATE_SPARSE
+        elif cutlass_3x:
+            instance_template = INSTANCE_TEMPLATE_CUTLASS_3X
+        else:
+            instance_template = INSTANCE_TEMPLATE
         inst = instance_template.render(
             config=config,
             name=fname,
@@ -966,7 +992,7 @@ def gen_function(
         instances[exec_item.exec_cond] = inst
         exec_cond_to_cutlass_3x[exec_item.exec_cond] = cutlass_3x
         instance_decl += inst
-    shape_eval_func = gemm_common.gen_shape_eval_code(
+    shape_eval_func = gemm_sparse_common.gen_shape_eval_code(
         indent=1, dtype="int64_t", dim_info_dict=dim_info_dict, is_ptr=True
     )
 
@@ -996,6 +1022,11 @@ def gen_function(
         meta_dims=meta_ndims,
         output_ndims=output_ndims,
     )
+    metadata_code = "\n".join([
+        "  // metadata pointer & stride for 2:4 sparsity",
+        "  void* m_ptr = m_ptr;",
+        "  int64_t metadata_stride = *m_dim1;"
+    ])
     return src_template.render(
         instances=instance_decl,
         function_name=func_name,
@@ -1004,6 +1035,7 @@ def gen_function(
         input_addr_calculator=input_addr_calculator,
         output_addr_calculator=output_addr_calculator,
         input_output_checks=input_output_checks,
+        metadata_code=metadata_code,
         exec_paths=exec_paths,
         input_ndims=input_ndims,
         weight_ndims=weight_ndims,
@@ -1140,6 +1172,7 @@ def gen_profiler(
     args_parser_template,
     support_split_k=False,
     output_addr_calculator="",
+    metadata_ptr_arg=None,
     bias_ptr_arg=None,
     extra_code="",
     problem_args_template_cutlass_3x=None,
@@ -1165,7 +1198,7 @@ def gen_profiler(
     bdims = ["&b_dim" + str(i) for i in range(ndims)]
     mdims = ["&m_dim" + str(i) for i in range(ndims)]
     cdims = ["&c_dim" + str(i) for i in range(ndims)]
-    shape_func = gemm_common.gen_shape_eval_code(
+    shape_func = gemm_sparse_common.gen_shape_eval_code(
         indent=2, dtype="int64_t", dim_info_dict=dim_info_dict, is_ptr=True
     )
 
@@ -1490,6 +1523,30 @@ def make_fproc(
         f_proc_op=fproc,
         include_cutlass_3x_ops=include_cutlass_3x_ops,
     )
+
+     # 1) pick the exact sparse algo you want (must match one of the keys in op_instance)
+    desired = "cutlass_sp_tensorop_f16_s16816gemm_f16_256x128_64x2_tn_align_8_8"
+    all_ops = func_attrs["op_instance"]
+    if desired not in all_ops:
+        raise RuntimeError(
+            f"Sparse GEMM algo {desired!r} not found. Available:\n  {list(all_ops)}"
+        )
+    # 2) overwrite op_instance so only that one remains
+    func_attrs["op_instance"] = OrderedDict([(desired, all_ops[desired])])
+
+    # 3) now hard-code exec_path to dispatch exactly that one algo for your test shape
+    #    (replace M,N,K with whatever you actually want to test)
+    test_cond = "M == 1024 && N == 2048 && K == 512"
+    func_attrs["exec_path"] = OrderedDict([
+        (
+            test_cond,
+            ExecItem(
+                profiling_key=test_cond,
+                exec_cond=test_cond,
+                algo=desired,
+            ),
+        )
+    ])
 
 
 def function_filter(cfg, func_attrs, ab_alignment):

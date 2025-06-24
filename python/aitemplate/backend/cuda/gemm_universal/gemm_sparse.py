@@ -19,9 +19,22 @@ ARGS_PARSER_TEMPLATE = jinja2.Template(
   int64_t a_dim0 = M;
   int64_t a_dim1 = K;
   int64_t b_dim0 = N;
-  int64_t b_dim1 = K;
+  int64_t b_dim1 = K / 2;
+  int64_t m_dim0 = N;
+  int64_t m_dim1 = K / 4;
   int64_t c_dim0 = M;
   int64_t c_dim1 = N;
+
+  int idx_A = memory_pool->AllocateTensor(a_dim0 * a_dim1, 1);
+  int idx_B = memory_pool->AllocateTensor(b_dim0 * b_dim1, 1);
+  int idx_M = memory_pool->AllocateTensor(m_dim0 * m_dim1, 1);
+  int idx_C = memory_pool->AllocateTensor(c_dim0 * c_dim1, 1, /*is_output=*/true);
+
+  // Now grab the raw void*’s:
+  void* ptr_A = memory_pool->RequestTensorByIdx(idx_A);
+  void* ptr_B = memory_pool->RequestTensorByIdx(idx_B);
+  void* ptr_M = memory_pool->RequestTensorByIdx(idx_M);
+  void* ptr_C = memory_pool->RequestTensorByIdx(idx_C);
 """
 )
 
@@ -196,6 +209,7 @@ def common_gen_profiler(
     src_template,
     problem_args_template,
     problem_args_template_cutlass_3x=None,
+    metadata_ptr_arg=None,
     bias_ptr_arg=None,
     extra_code="",
 ):
@@ -213,6 +227,7 @@ def common_gen_profiler(
         args_parser_template=ARGS_PARSER_TEMPLATE,
         support_split_k=True,
         output_addr_calculator=output_addr_calculator,
+        metadata_ptr_arg=metadata_ptr_arg,
         bias_ptr_arg=bias_ptr_arg,
         extra_code=extra_code,
     )

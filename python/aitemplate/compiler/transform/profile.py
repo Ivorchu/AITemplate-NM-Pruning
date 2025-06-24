@@ -34,6 +34,7 @@ from aitemplate.compiler.ops.gemm_universal.gemm_common import (
 )
 from aitemplate.utils.environ import force_profiler_cache
 
+
 # pylint: disable=C0103,W0613,W0102
 
 
@@ -128,3 +129,5 @@ def profile(
                 func._attrs["exec_path"] = deepcopy(
                     funcs_to_profile[func._attrs["name"]]._attrs["exec_path"]
                 )
+
+

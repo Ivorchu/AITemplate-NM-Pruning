@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, "/home/cslab/Documents/AITemplate/python")
+sys.path.insert(0, "/AITemplate/python")
 
 import torch
 
@@ -13,12 +13,12 @@ from aitemplate.testing.benchmark_pt import benchmark_torch_function
 class PytorchModel(torch.nn.Module):
     def __init__(self, hidden, eps: float = 1e-5):
         super().__init__()
-        self.dense1 = torch.nn.Linear(hidden, 4 * hidden)
-        self.dense2 = torch.nn.Linear(4 * hidden, 16 * hidden)
-        self.dense3 = torch.nn.Linear(16 * hidden, 64 * hidden)
-        self.dense4 = torch.nn.Linear(64 * hidden, 16 * hidden)
-        self.dense5 = torch.nn.Linear(16 * hidden, 4 * hidden)
-        self.dense6 = torch.nn.Linear(4 * hidden, hidden)
+        self.dense1 = torch.nn.Linear(hidden, 4 * hidden, bias=False)
+        self.dense2 = torch.nn.Linear(4 * hidden, 16 * hidden, bias=False)
+        self.dense3 = torch.nn.Linear(16 * hidden, 64 * hidden, bias=False)
+        self.dense4 = torch.nn.Linear(64 * hidden, 16 * hidden, bias=False)
+        self.dense5 = torch.nn.Linear(16 * hidden, 4 * hidden, bias=False)
+        self.dense6 = torch.nn.Linear(4 * hidden, hidden, bias=False)
 
     def forward(self, input):
         hidden_states = self.dense1(input)
@@ -33,12 +33,12 @@ class PytorchModel(torch.nn.Module):
 class DenseGemmModel(nn.Module):
     def __init__(self, hidden, eps: float = 1e-5):
         super().__init__()
-        self.dense1 = nn.Linear(hidden, 4 * hidden)
-        self.dense2 = nn.Linear(4 * hidden, 16 * hidden)
-        self.dense3 = nn.Linear(16 * hidden, 64 * hidden)
-        self.dense4 = nn.Linear(64 * hidden, 16 * hidden)
-        self.dense5 = nn.Linear(16 * hidden, 4 * hidden)
-        self.dense6 = nn.Linear(4 * hidden, hidden)
+        self.dense1 = nn.Linear(hidden, 4 * hidden, bias=False)
+        self.dense2 = nn.Linear(4 * hidden, 16 * hidden, bias=False)
+        self.dense3 = nn.Linear(16 * hidden, 64 * hidden, bias=False)
+        self.dense4 = nn.Linear(64 * hidden, 16 * hidden, bias=False)
+        self.dense5 = nn.Linear(16 * hidden, 4 * hidden, bias=False)
+        self.dense6 = nn.Linear(4 * hidden, hidden, bias=False)
 
     def forward(self, input):
         hidden_states = self.dense1(input)
@@ -53,12 +53,12 @@ class DenseGemmModel(nn.Module):
 class SparseGemmModel(nn.Module):
     def __init__(self, hidden, eps: float = 1e-5):
         super().__init__()
-        self.dense1 = nn.LinearSparse(hidden, 4 * hidden)
-        self.dense2 = nn.LinearSparse(4 * hidden, 16 * hidden)
-        self.dense3 = nn.LinearSparse(16 * hidden, 64 * hidden)
-        self.dense4 = nn.LinearSparse(64 * hidden, 16 * hidden)
-        self.dense5 = nn.LinearSparse(16 * hidden, 4 * hidden)
-        self.dense6 = nn.LinearSparse(4 * hidden, hidden)
+        self.dense1 = nn.LinearSparse(hidden, 4 * hidden, bias=False)
+        self.dense2 = nn.LinearSparse(4 * hidden, 16 * hidden, bias=False)
+        self.dense3 = nn.LinearSparse(16 * hidden, 64 * hidden, bias=False)
+        self.dense4 = nn.LinearSparse(64 * hidden, 16 * hidden, bias=False)
+        self.dense5 = nn.LinearSparse(16 * hidden, 4 * hidden, bias=False)
+        self.dense6 = nn.LinearSparse(4 * hidden, hidden, bias=False)
 
     def forward(self, input):
         hidden_states = self.dense1(input)
@@ -140,16 +140,20 @@ def compress_2_to_4(model: torch.nn.Module):
         module.register_buffer("weight_meta", Wm)
 
 
-def assign_sparse_buffers(pt_model, ait_sparse_model):
-    pt_iter = pt_model.named_modules()
-    ai_iter = ait_sparse_model.named_modules()
-    for (pt_name, pt_mod), (ai_name, ai_mod) in zip(pt_iter, ai_iter):
+def assign_sparse_buffers(pt_model, ait_model):
+    for (_, pt_mod), (_, ai_mod) in zip(
+        pt_model.named_modules(), ait_model.named_modules()
+    ):
         if isinstance(pt_mod, torch.nn.Linear) and isinstance(ai_mod, nn.LinearSparse):
-            Wc = pt_mod.weight_comp      # [out, in//2]
-            Wm = pt_mod.weight_meta      # [out, in//4]
-            ai_mod.register_buffer("weight_comp", Wc)
-            ai_mod.register_buffer("weight_meta", Wm)
-            ai_mod.bias.data.copy_(pt_mod.bias.data)
+            # pull out NumPy arrays
+            Wc = pt_mod.weight_comp.detach().cpu().numpy()
+            Wm = pt_mod.weight_meta.detach().cpu().numpy()
+            # shove them into the AIT template Tensors
+            ai_mod.weight_comp.tensor()._attrs["value"] = Wc
+            ai_mod.weight_meta.tensor()._attrs["value"] = Wm
+            if ai_mod.use_bias:
+                b = pt_mod.bias.detach().cpu().numpy()
+                ai_mod.bias.tensor()._attrs["value"] = b
 
 
 def map_all_constants(ait_model):
@@ -184,6 +188,7 @@ def benchmark(batch_size=1024, hidden=16):
 
     # create sparse model
     sparse_model = SparseGemmModel(hidden)
+    assign_sparse_buffers(pytorch_model, sparse_model)
 
     X_dense = Tensor(
         shape = [batch_size, hidden],
@@ -226,7 +231,6 @@ def benchmark(batch_size=1024, hidden=16):
             dense_inputs, dense_outputs, graph_mode=True, count=count
         )
 
-    assign_sparse_buffers(pytorch_model, sparse_model)
     sparse_consts = map_all_constants(sparse_model)
     with compile_model(
         Y_sparse, target, "./tmp", "sparse_model", constants=sparse_consts

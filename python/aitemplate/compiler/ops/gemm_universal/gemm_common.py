@@ -518,7 +518,6 @@ class gemm(Operator):
             raise RuntimeError(
                 f"No GEMM op instances were generated for {self._attrs['op']}."
             )
-
         filter_func = registry.get(func_key)
         # run compile-time filter
         new_op_instance = OrderedDict(

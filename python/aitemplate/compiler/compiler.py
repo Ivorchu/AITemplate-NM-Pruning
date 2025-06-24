@@ -274,6 +274,7 @@ def compile_model(
                     profile_devs = [0]
                 else:
                     profile_devs = device_env.split(",")
+            
             compiler.transform.profile(
                 graph,
                 profile_dir,

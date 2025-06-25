@@ -130,4 +130,3 @@ def profile(
                     funcs_to_profile[func._attrs["name"]]._attrs["exec_path"]
                 )
 
-

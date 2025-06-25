@@ -20,16 +20,19 @@ class LinearSparse(Module):
             LinearSparse.USE_CUDA = detect_target().name() == "cuda"
         self.weight = Parameter(shape=[out_channels, in_channels], dtype=dtype)
         self.weight_comp = Parameter(
-            shape=[out_channels, in_channels // 2], dtype="float16"
+            shape=[out_channels, in_channels // 2],
+            dtype=dtype,           # float16
         )
         self.weight_meta = Parameter(
-            shape=[out_channels, in_channels // 4], dtype="uint8"
+            shape=[out_channels, in_channels // 4],
+            dtype="int32",         # <--- tell AIT this is int32
         )
         op_name = "gemm_sparse_bias" if bias else "gemm_sparse"
         if specialization is not None:
             op_name += "_" + specialization
         if bias:
             self.bias = Parameter(shape=[out_channels], dtype=dtype)
+        
         op_func = getattr(ops, op_name)
         self._op_name = op_name
         self.op = op_func(**kwargs)

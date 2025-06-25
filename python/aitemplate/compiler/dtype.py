@@ -25,6 +25,7 @@ _DTYPE2BYTE = {
     "int32": 4,
     "int64": 8,
     "bfloat16": 2,
+    "uint8": 1,
 }
 
 

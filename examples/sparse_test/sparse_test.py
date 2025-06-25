@@ -2,12 +2,12 @@ import sys
 sys.path.insert(0, "/AITemplate/python")
 
 import torch
+import numpy as np
 
 from aitemplate.compiler import compile_model
 from aitemplate.frontend import nn, Tensor
 from aitemplate.testing import detect_target
 from aitemplate.testing.benchmark_pt import benchmark_torch_function
-
 
 
 class PytorchModel(torch.nn.Module):
@@ -116,7 +116,7 @@ def compress_2_to_4(model: torch.nn.Module):
 
         # allocate
         Wc = torch.zeros(rows, G * 2, dtype=W.dtype, device=W.device)
-        Wm = torch.zeros(rows,   G, dtype=torch.uint8, device=W.device)
+        Wm = torch.zeros(rows,   G, dtype=torch.int32, device=W.device)
 
         for i in range(rows):
             comp_vals = []
@@ -134,7 +134,7 @@ def compress_2_to_4(model: torch.nn.Module):
                 comp_vals.extend([block[p1].item(), block[p2].item()])
 
             Wc[i].copy_(torch.tensor(comp_vals, dtype=W.dtype, device=W.device))
-            Wm[i].copy_(torch.tensor(metas,     dtype=torch.uint8, device=W.device))
+            Wm[i].copy_(torch.tensor(metas,     dtype=torch.int32, device=W.device))
 
         module.register_buffer("weight_comp", Wc)
         module.register_buffer("weight_meta", Wm)
@@ -149,21 +149,23 @@ def assign_sparse_buffers(pt_model, ait_model):
             Wc = pt_mod.weight_comp.detach().cpu().numpy()
             Wm = pt_mod.weight_meta.detach().cpu().numpy()
             # shove them into the AIT template Tensors
-            ai_mod.weight_comp.tensor()._attrs["value"] = Wc
-            ai_mod.weight_meta.tensor()._attrs["value"] = Wm
+            ai_mod.weight_comp.tensor()._attrs["value"] = Wc   # Wc is float16
+            ai_mod.weight_meta.tensor()._attrs["value"] = Wm   # now int32
             if ai_mod.use_bias:
-                b = pt_mod.bias.detach().cpu().numpy()
+                b = pt_mod.bias.detach().cpu().numpy().astype(np.float16)
                 ai_mod.bias.tensor()._attrs["value"] = b
 
 
 def map_all_constants(ait_model):
     consts = {}
     # first the parameters (weight, bias)
-    for name, tensor in ait_model.named_parameters():
-        consts[name.replace(".", "_")] = tensor.detach().cpu().numpy()
+    for name, param in ait_model.named_parameters():
+        arr = param.tensor()._attrs["value"]
+        consts[name.replace(".", "_")] = arr
     # now the buffers (weight_comp, weight_meta)
-    for name, tensor in ait_model.named_buffers():
-        consts[name.replace(".", "_")] = tensor.detach().cpu().numpy()
+    for name, buf in ait_model.named_buffers():
+        arr = buf.tensor()._attrs["value"]
+        consts[name.replace(".", "_")] = arr
     return consts
 
     

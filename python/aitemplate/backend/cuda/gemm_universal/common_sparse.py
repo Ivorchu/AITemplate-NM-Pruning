@@ -141,7 +141,7 @@ using {{name}} = cutlass::gemm::device::GemmUniversalAdapter<{{config_name}}>;
 
 INSTANCE_TEMPLATE_SPARSE = jinja2.Template("""
 {{config}}
-using {{name}} = cutlass::gemm::device::GemmSparse<{{config_name}}>;
+using {{name}} = cutlass::gemm::device::SparseGemm<{{config_name}}>;
 """)
 
 
@@ -198,9 +198,6 @@ void {{function_name}} (
     void* b_ptr,
     void* m_ptr,
     int64_t metadata_stride,
-{% if has_d %}
-    void* d_ptr,
-{% endif %}
     void* c_ptr,
     uint8_t* workspace,
 {% if support_split_k %}
@@ -223,8 +220,10 @@ void {{function_name}} (
   {{shape_eval}}
   {{input_addr_calculator}}
   {{output_addr_calculator}}
-  {{metadata_code}}
-  {{extra_shape}}
+
+  void* __m_ptr = m_ptr;
+  int64_t __m_stride = metadata_stride;
+
   {{input_output_checks}}
 
   {{exec_paths}}
@@ -294,7 +293,7 @@ void {{func_name}}(
   void*,        // ptr_B (values)
 {% if has_metadata %}
   void*,        // ptr_B_meta
-  int64_t       // metadata_stride,
+  int64_t,       // metadata_stride,
 {% endif %}
   void*,        // ptr_C (output)
   uint8_t*,     // workspace
@@ -745,7 +744,7 @@ def update_alignments_in_gemm_instance(
     op_def: str,
     func_attrs: Dict[str, Any],
     for_profiler: bool,
-    kernel_config: Tuple[str, int, int] = ("cutlass::gemm::device::Gemm", 21, 3),
+    kernel_config: Tuple[str, int, int] = ("cutlass::gemm::device::SparseGemm", 21, 3),
 ) -> str:
     """
     update kAlignmentA, kAlignmentB, and epilogue_alignment in op_def,
@@ -824,7 +823,7 @@ def sparse_gemm_instance(
 
     op_def = update_alignments_in_gemm_instance(op_def, func_attrs, for_profiler)
     tmp = op_def.replace(
-        "cutlass::gemm::device::Gemm", "cutlass::gemm::device::GemmSparse"
+        "cutlass::gemm::device::Gemm", "cutlass::gemm::device::SparseGemm"
     )
     tmp = tmp.replace("false,", "")
     return tmp
@@ -862,19 +861,15 @@ def kernel_name(op):
 def emit_instance(
     op,
     for_profiler,
-    f_instance_convertor=universal_gemm_instance,
+    f_instance_convertor=sparse_gemm_instance,
     emit_kernel=False,
     func_attrs=None,
 ):
     import cutlass_lib
 
     cutlass_3x = op.gemm_kind == cutlass_lib.library.GemmKind.Universal3x
-    if cutlass_3x:
-        emitter = cutlass_lib.gemm_operation.EmitGemmUniversal3xInstance()
-    else:
-        emitter = cutlass_lib.gemm_operation.EmitGemmInstance()
-        if emit_kernel:
-            emitter = cutlass_lib.gemm_operation.EmitGemmUniversalInstance()
+        
+    emitter = cutlass_lib.gemm_operation.EmitSparseGemmInstance()
 
     op_def = emitter.emit(op)
     op_def = f_instance_convertor(
@@ -1013,13 +1008,13 @@ def gen_function(
         exec_inst = exec_cond_template.render(
             indent="  ",
             cond=exec_cond,
-            program=program,
+            program=program,                                                                      
         )
         exec_paths += exec_inst
     input_output_checks = INPUT_OUTPUT_CHECKS_TEMPLATE.render(
         input_ndims=input_ndims,
         weight_ndims=weight_ndims,
-        meta_dims=meta_ndims,
+        meta_ndims=meta_ndims,
         output_ndims=output_ndims,
     )
     metadata_code = "\n".join([
@@ -1226,6 +1221,7 @@ def gen_profiler(
     input_output_checks = INPUT_OUTPUT_CHECKS_TEMPLATE.render(
         input_ndims=ndims,
         weight_ndims=ndims,
+        meta_ndims=ndims,
         output_ndims=ndims,
     )
 
@@ -1233,7 +1229,7 @@ def gen_profiler(
     instances = []
     benchmark_instances = []
     for instance_idx, (op_name, op) in enumerate(op_instance.items()):
-        config = emit_instance(op, for_profiler=True)
+        config = emit_instance(op, func_attrs=func_attrs, for_profiler=True)
         instance_name = f"{instance_name_base}_{instance_idx}"
         gemm_op = f"gemm_op_{instance_idx}"
         cutlass_3x = op.gemm_kind == cutlass_lib.library.GemmKind.Universal3x
@@ -1275,8 +1271,10 @@ def gen_profiler(
         function_name=function_name,
         input_ndims=ndims,
         weight_ndims=ndims,
+        meta_ndims=ndims,
         output_ndims=ndims,
         shape_eval=shape_func,
+        input_addr_calculator="",
         input_output_checks=input_output_checks,
         exec_paths=exec_program,
         output_addr_calculator=output_addr_calculator,
@@ -1313,6 +1311,7 @@ def gen_profiler(
         function_name=function_name,
         input_ndims=ndims,
         weight_ndims=ndims,
+        meta_ndims=ndims,
         output_ndims=ndims,
         func_call=func_call,
         name=instance_name_base,
@@ -1523,30 +1522,21 @@ def make_fproc(
         f_proc_op=fproc,
         include_cutlass_3x_ops=include_cutlass_3x_ops,
     )
+    # pick one algorithm name
+    algo_name = next(iter(func_attrs["op_instance"].keys()))
 
-     # 1) pick the exact sparse algo you want (must match one of the keys in op_instance)
-    desired = "cutlass_sp_tensorop_f16_s16816gemm_f16_256x128_64x2_tn_align_8_8"
-    all_ops = func_attrs["op_instance"]
-    if desired not in all_ops:
-        raise RuntimeError(
-            f"Sparse GEMM algo {desired!r} not found. Available:\n  {list(all_ops)}"
-        )
-    # 2) overwrite op_instance so only that one remains
-    func_attrs["op_instance"] = OrderedDict([(desired, all_ops[desired])])
-
-    # 3) now hard-code exec_path to dispatch exactly that one algo for your test shape
-    #    (replace M,N,K with whatever you actually want to test)
-    test_cond = "M == 1024 && N == 2048 && K == 512"
+    # overwrite so there’s always one branch, unconditionally taken
     func_attrs["exec_path"] = OrderedDict([
         (
-            test_cond,
-            ExecItem(
-                profiling_key=test_cond,
-                exec_cond=test_cond,
-                algo=desired,
-            ),
-        )
+        "true",
+        ExecItem(
+            profiling_key="true",
+            exec_cond="true",
+            algo=algo_name,
+        ),
+        ),
     ])
+
 
 
 def function_filter(cfg, func_attrs, ab_alignment):

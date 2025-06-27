@@ -45,6 +45,9 @@ INPUT_ADDR_CALCULATOR = jinja2.Template(
   int64_t input_b_batch_stride = {{input_b_batch_stride_dim}};
   int64_t input_b_stride = {{input_b_stride_dim}};
   int64_t input_b_offset = {{input_b_offset_val}}; // default to 0
+  int64_t input_m_batch_stride = {{input_m_batch_stride_dim}};
+  int64_t input_m_stride = {{input_m_stride_dim}};
+  int64_t input_m_offset = {{input_m_offset_val}}; // default to 0 
     """
 )
 
@@ -54,10 +57,12 @@ INPUT_ADDR_CALCULATOR = jinja2.Template(
 OUTPUT_ADDR_CALCULATOR = jinja2.Template(
     """
   {% if not output_accessor.is_from_strided_tensor %}
-  int64_t output_stride = {{stride_dim}};
+  int64_t output_batch_stride = {{output_batch_stride_dim}};
+  int64_t output_stride = {{output_stride_dim}};
   int64_t output_offset = 0;
   {% else %}
-  int64_t output_stride = {{output_accessor.actual_total_elements_from_stride_dim}};
+  int64_t output_batch_stride = {{output_accessor.stride(output_accessor.rank - 2)}};
+  int64_t output_stride = {{output_accessor.stride(output_accessor.rank - 1)}};
   int64_t output_offset = {{output_accessor.offset}};
   {% endif %}
     """
@@ -65,7 +70,8 @@ OUTPUT_ADDR_CALCULATOR = jinja2.Template(
 
 DEFAULT_OUTPUT_ADDR_CALCULATOR = jinja2.Template(
     """
-  int64_t output_stride = {{stride_dim}};
+  int64_t output_batch_stride = {{output_batch_stride_dim}};
+  int64_t output_stride = {{output_stride_dim}};
   int64_t output_offset = 0;
     """
 )
@@ -203,10 +209,10 @@ void {{function_name}} (
 {% if support_split_k %}
     int split_k,
 {% endif %}
-{% for idx in range(input_ndims) %}
+{% for idx in range(weight_ndims) %}
     int64_t* a_dim{{idx}},
 {% endfor %}
-{% for idx in range(weight_ndims) %}
+{% for idx in range(input_ndims) %}
     int64_t* b_dim{{idx}},
 {% endfor %}
 {% for idx in range(meta_ndims) %}
@@ -221,17 +227,14 @@ void {{function_name}} (
   {{input_addr_calculator}}
   {{output_addr_calculator}}
 
-  void* __m_ptr = m_ptr;
-  int64_t __m_stride = metadata_stride;
-
   {{input_output_checks}}
 
   {{exec_paths}}
-  {% for idx in range(input_ndims) %}
-      std::cout << "input_ndims{{idx}}: " << *a_dim{{idx}} << std::endl;
-  {% endfor %}
   {% for idx in range(weight_ndims) %}
-      std::cout << "weight_ndims{{idx}}: " << *b_dim{{idx}} << std::endl;
+      std::cout << "weight_ndims{{idx}}: " << *a_dim{{idx}} << std::endl;
+  {% endfor %}
+  {% for idx in range(input_ndims) %}
+      std::cout << "input_ndims{{idx}}: " << *b_dim{{idx}} << std::endl;
   {% endfor %}
   {% for idx in range(meta_ndims) %}
       std::cout << "meta_ndims{{idx}}: " << *m_dim{{idx}} << std::endl;
@@ -253,6 +256,7 @@ EXEC_TEMPLATE = jinja2.Template(
     """
 //  TODO: cast to right dtype
 {{indent}}using ElementComputeEpilogue = typename {{instance}}::ElementAccumulator;
+{{indent}}using ElementE = typename {{instance}}::ElementE;
 
 {{indent}}using coord_t = cutlass::gemm::GemmCoord::Index;
 {{indent}}typename {{instance}}::Arguments arguments;
@@ -400,12 +404,13 @@ TENSOR_DECL_TEMPLATE = jinja2.Template(
     """
   int64_t a_ptr_sz = a_dim0 * a_dim1;
   int64_t b_ptr_sz = b_dim0 * b_dim1;
+  int64_t m_ptr_sz = m_dim0 * m_dim1;
   int64_t c_ptr_sz = c_dim0 * c_dim1;
 
   // The value 1 is used to force ptr_max_sz to be non-zero
-  int64_t ptr_max_sz = std::max<int64_t>({1, a_ptr_sz, b_ptr_sz, c_ptr_sz});
+  int64_t ptr_max_sz = std::max<int64_t>({1, a_ptr_sz, b_ptr_sz, m_ptr_sz, c_ptr_sz});
 
-  size_t one_copy_sz = a_ptr_sz + b_ptr_sz + c_ptr_sz;
+  size_t one_copy_sz = a_ptr_sz + b_ptr_sz + m_ptr_sz + c_ptr_sz;
 {% if has_bias %}
   one_copy_sz += c_dim1;
 {%endif%}
@@ -413,6 +418,7 @@ TENSOR_DECL_TEMPLATE = jinja2.Template(
 
   memory_pool->AllocateTensor(a_ptr_sz, mem_pool_sz);  // a_ptr: index 0
   memory_pool->AllocateTensor(b_ptr_sz, mem_pool_sz);  // b_ptr: index 1
+  memory_pool->AllocateTensor(m_ptr_sz, mem_pool_sz);  // m_ptr: index 0
   memory_pool->AllocateTensor(c_ptr_sz, mem_pool_sz, /*is_output*/true);  // c_ptr: index 2
 
 {% if has_bias %}
@@ -867,6 +873,7 @@ def emit_instance(
 ):
     import cutlass_lib
 
+    '''
     cutlass_3x = op.gemm_kind == cutlass_lib.library.GemmKind.Universal3x
         
     emitter = cutlass_lib.gemm_operation.EmitSparseGemmInstance()
@@ -878,6 +885,30 @@ def emit_instance(
         for_profiler=for_profiler,
         cutlass_3x=cutlass_3x,
     )
+    '''
+    op_def = """
+// Gemm operator cutlass_tensorop_s16832spgemm_f16_64x128_64x6_nn_align8
+using Operation_cutlass_tensorop_s16832spgemm_f16_64x128_64x6_nn_align8 = cutlass::gemm::device::SparseGemm<
+    cutlass::half_t, cutlass::layout::RowMajor,
+    cutlass::half_t, cutlass::layout::ColumnMajor,
+    cutlass::half_t, cutlass::layout::RowMajor,
+    int32_t,
+    cutlass::arch::OpClassTensorOp,
+    cutlass::arch::Sm80,
+    cutlass::gemm::GemmShape<64, 128, 64>,
+    cutlass::gemm::GemmShape<32, 64, 64>,
+    cutlass::gemm::GemmShape<16, 8, 32>,
+    cutlass::epilogue::thread::LinearCombination<
+        cutlass::half_t,
+        4,
+        int32_t,
+        int32_t
+    >,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,
+    6,
+    8,
+    8>;
+    """
 
     return op_def
 

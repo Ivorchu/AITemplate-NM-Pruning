@@ -48,19 +48,15 @@ ARGS_PARSER_TEMPLATE = jinja2.Template(
 PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     """
     // 1) problem size
-    cutlass::gemm::GemmCoord{
-        static_cast<coord_t>(M),
-        static_cast<coord_t>(N),
-        static_cast<coord_t>(K)
-    },
+    cutlass::gemm::GemmCoord{ M, N, K },
 
-    // 2) ref_A
-    { ({{elem_input_type}} const*)(a_ptr) + input_a_offset,
-    input_a_batch_stride, input_a_stride },
-
-    // 3) ref_B  
+    // 2) ref_B  
     { ({{elem_input_type}} const*)(b_ptr) + input_b_offset,
     input_b_batch_stride, input_b_stride },
+
+    // 3) ref_A
+    { ({{elem_input_type}} const*)(a_ptr) + input_a_offset,
+    input_a_batch_stride, input_a_stride },
 
     // 4) ref_C  
     { ({{elem_output_type}}*)(c_ptr) + output_offset,
@@ -71,8 +67,8 @@ PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     M * N, output_stride },
 
     // 6) ref_E  (the 2:4 metadata)  
-    { ({{elem_meta_type}}*)(m_ptr),
-    metadata_stride, metadata_stride },
+    { ({{elem_meta_type}}*)(m_ptr) + input_m_offset,
+    input_m_batch_stride, input_m_stride },
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
@@ -115,19 +111,15 @@ PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
 PROFILER_PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     """
     // 1) problem size
-    cutlass::gemm::GemmCoord{
-        static_cast<coord_t>(M),
-        static_cast<coord_t>(N),
-        static_cast<coord_t>(K)
-    },
-
-    // 2) ref_A
-    { ({{elem_input_type}} const*)(a_ptr) + input_a_offset,
-    input_a_batch_stride, input_a_stride },
-
+    cutlass::gemm::GemmCoord{ M, N, K * 2},
+    
     // 3) ref_B  
     { ({{elem_input_type}} const*)(b_ptr) + input_b_offset,
     input_b_batch_stride, input_b_stride },
+    
+    // 2) ref_A
+    { ({{elem_input_type}} const*)(a_ptr) + input_a_offset,
+    input_a_batch_stride, input_a_stride },
 
     // 4) ref_C  
     { ({{elem_output_type}}*)(c_ptr) + output_offset,
@@ -138,8 +130,8 @@ PROFILER_PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     M * N, output_stride },
 
     // 6) ref_E  (the 2:4 metadata)  
-    { ({{elem_meta_type}}*)(m_ptr),
-    metadata_stride, metadata_stride },
+    { ({{elem_meta_type}}*)(m_ptr) + input_m_offset,
+    input_m_batch_stride, input_m_stride },
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
@@ -305,7 +297,8 @@ def gen_profiler(func_attrs, workdir, profiler_filename, dim_info_dict):
         args_parser_template=common_sparse.ARGS_PARSER_TEMPLATE,
         support_split_k=True,
         output_addr_calculator=common_sparse.DEFAULT_OUTPUT_ADDR_CALCULATOR.render(
-            stride_dim="*b_dim0"
+            output_batch_stride_dim="*b_dim0 * N",
+            output_stride_dim="*b_dim0"
         ),
         metadata_ptr_arg="ptr_M",
         bias_ptr_arg=None,
@@ -326,13 +319,17 @@ def get_input_addr_calculator(func_attrs):
     input_a_batch_stride_dim = "M * K"
     input_a_stride_k_dim = "K"
     input_a_offset = 0
-    input_b_batch_stride_dim = "N * K"
-    input_b_stride_k_dim = "K"
+    input_m_batch_stride_dim = "metadata_stride"
+    input_m_stride_k_dim = "metadata_stride"
+    input_m_offset = 0
+    input_b_batch_stride_dim = "N * K / 2"
+    input_b_stride_k_dim = "K / 2"
     input_b_offset = 0
 
     if "input_accessors" in func_attrs:
         input_a_accessor = func_attrs["input_accessors"][0]
         input_b_accessor = func_attrs["input_accessors"][1]
+        input_m_accessor = func_attrs["input_accessors"][2]
         if input_a_accessor.is_from_strided_tensor:
             input_a_offset = input_a_accessor.offset
             shapes = input_a_accessor.original_shapes
@@ -343,10 +340,18 @@ def get_input_addr_calculator(func_attrs):
             shapes = input_b_accessor.original_shapes
             input_b_stride_k_dim = input_b_accessor.stride(len(shapes) - 2)
 
+        if input_m_accessor.is_from_strided_tensor:
+            input_m_offset = input_m_accessor.offset
+            shapes = input_m_accessor.original_shapes
+            input_m_stride_k_dim = input_m_accessor.stride(len(shapes) - 2)
+
     input_addr_calculator = common_sparse.INPUT_ADDR_CALCULATOR.render(
         input_a_batch_stride_dim=input_a_batch_stride_dim,
         input_a_stride_dim=input_a_stride_k_dim,
         input_a_offset_val=input_a_offset,
+        input_m_batch_stride_dim=input_m_batch_stride_dim,
+        input_m_stride_dim=input_m_stride_k_dim,
+        input_m_offset_val=input_m_offset,
         input_b_batch_stride_dim=input_b_batch_stride_dim,
         input_b_stride_dim=input_b_stride_k_dim,
         input_b_offset_val=input_b_offset,
@@ -507,7 +512,7 @@ def gen_function(
     elem_output_type = backend_spec.dtype_to_lib_type(
         func_attrs["outputs"][0]._attrs["dtype"]
     )
-    elem_meta_type = "uint8_t"
+    elem_meta_type = "ElementE"
     problem_args = PROBLEM_ARGS_TEMPLATE.render(
         elem_input_type=elem_input_type,
         elem_output_type=elem_output_type,
@@ -532,7 +537,8 @@ def gen_function(
         f_instance_convertor=common_sparse.sparse_gemm_instance,
         input_addr_calculator=input_addr_calculator,
         output_addr_calculator=common_sparse.OUTPUT_ADDR_CALCULATOR.render(
-            stride_dim="N",
+            output_batch_stride_dim="M * N",
+            output_stride_dim="N",
             output_accessor=func_attrs["output_accessors"][0],
         ),
     )

@@ -1,7 +1,0 @@
-Applied magnitude-based 2:4 pruning to dense1
-Applied magnitude-based 2:4 pruning to dense2
-Applied magnitude-based 2:4 pruning to dense3
-Applied magnitude-based 2:4 pruning to dense4
-Applied magnitude-based 2:4 pruning to dense5
-Applied magnitude-based 2:4 pruning to dense6
-Dense model outputs were correct.

@@ -176,6 +176,8 @@ SRC_TEMPLATE = jinja2.Template(
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 
+#include "cutlass/tensor_ref.h"
+
 using bfloat16 = nv_bfloat16;
 
 {{extra_code}}
@@ -887,22 +889,22 @@ def emit_instance(
     )
     '''
     op_def = """
-// Gemm operator cutlass_tensorop_s16832spgemm_f16_64x128_64x6_nn_align8
-using Operation_cutlass_tensorop_s16832spgemm_f16_64x128_64x6_nn_align8 = cutlass::gemm::device::SparseGemm<
+// Gemm operator cutlass_tensorop_s16832spgemm_f16_128x128_64x6_nn_align8
+using Operation_cutlass_tensorop_s16832spgemm_f16_128x128_64x6_nn_align8 = cutlass::gemm::device::SparseGemm<
     cutlass::half_t, cutlass::layout::RowMajor,
     cutlass::half_t, cutlass::layout::ColumnMajor,
     cutlass::half_t, cutlass::layout::RowMajor,
-    int32_t,
+    float,
     cutlass::arch::OpClassTensorOp,
     cutlass::arch::Sm80,
-    cutlass::gemm::GemmShape<64, 128, 64>,
-    cutlass::gemm::GemmShape<32, 64, 64>,
+    cutlass::gemm::GemmShape<128, 128, 64>,
+    cutlass::gemm::GemmShape<64, 64, 64>,
     cutlass::gemm::GemmShape<16, 8, 32>,
     cutlass::epilogue::thread::LinearCombination<
         cutlass::half_t,
         4,
-        int32_t,
-        int32_t
+        float,
+        float
     >,
     cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,
     6,

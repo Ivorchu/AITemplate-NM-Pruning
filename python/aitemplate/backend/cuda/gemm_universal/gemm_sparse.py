@@ -51,24 +51,24 @@ PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     cutlass::gemm::GemmCoord{ M, N, K },
 
     // 2) ref_B  
-    { ({{elem_input_type}} const*)(b_ptr) + input_b_offset,
-    input_b_batch_stride, input_b_stride },
+    { (cutlass::half_t const*)(b_ptr) + input_b_offset,
+    input_b_batch_stride },
 
     // 3) ref_A
-    { ({{elem_input_type}} const*)(a_ptr) + input_a_offset,
-    input_a_batch_stride, input_a_stride },
+    { (cutlass::half_t const*)(a_ptr) + input_a_offset,
+    input_a_batch_stride },
 
     // 4) ref_C  
-    { ({{elem_output_type}}*)(c_ptr) + output_offset,
-    M * N, output_stride },
+    { (cutlass::half_t*)(c_ptr) + output_offset,
+    M * N },
 
     // 5) ref_D  (same as C for inplace)  
-    { ({{elem_output_type}}*)(c_ptr) + output_offset,
-    M * N, output_stride },
+    { (cutlass::half_t*)(c_ptr) + output_offset,
+    M * N },
 
     // 6) ref_E  (the 2:4 metadata)  
-    { ({{elem_meta_type}}*)(m_ptr) + input_m_offset,
-    input_m_batch_stride, input_m_stride },
+    { (ElementE*)(m_ptr) + input_m_offset,
+    input_m_batch_stride },
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
@@ -254,7 +254,7 @@ def gen_profiler(func_attrs, workdir, profiler_filename, dim_info_dict):
     A_type = spec.dtype_to_lib_type(func_attrs["inputs"][0]._attrs["dtype"])
     B_type = spec.dtype_to_lib_type(func_attrs["inputs"][1]._attrs["dtype"])
     C_type = spec.dtype_to_lib_type(func_attrs["outputs"][0]._attrs["dtype"])
-    accum = spec.dtype_to_lib_type(cutlass_lib.library.DataType.f16)
+    accum = spec.dtype_to_lib_type("float32")
     data_type = (A_type, B_type, C_type, accum)
 
     # 2) reuse the *dense* GEMM tile descriptions & alignments

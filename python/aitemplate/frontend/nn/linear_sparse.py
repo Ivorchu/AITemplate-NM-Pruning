@@ -18,7 +18,7 @@ class LinearSparse(Module):
         super().__init__()
         if LinearSparse.USE_CUDA is None:
             LinearSparse.USE_CUDA = detect_target().name() == "cuda"
-        self.weight = Parameter(shape=[out_channels, in_channels], dtype=dtype)
+        # self.weight = Parameter(shape=[out_channels, in_channels], dtype=dtype)
         self.weight_comp = Parameter(
             shape=[out_channels, in_channels // 2],
             dtype=dtype,           # float16

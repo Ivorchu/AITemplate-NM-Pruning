@@ -161,15 +161,15 @@ def map_all_constants(ait_model):
     # first the parameters (weight, bias)
     for name, param in ait_model.named_parameters():
         arr = param.tensor()._attrs["value"]
-        consts[name.replace(".", "_")] = arr
+        consts[name.replace(".", "_")] = torch.from_numpy(arr)
     # now the buffers (weight_comp, weight_meta)
     for name, buf in ait_model.named_buffers():
         arr = buf.tensor()._attrs["value"]
-        consts[name.replace(".", "_")] = arr
+        consts[name.replace(".", "_")] = torch.from_numpy(arr)
     return consts
 
     
-def benchmark(batch_size=1024, hidden=16):
+def benchmark(batch_size=32, hidden=16):
     # create pytorch model
     pytorch_model = PytorchModel(hidden).cuda().half()
 
@@ -190,8 +190,7 @@ def benchmark(batch_size=1024, hidden=16):
 
     # create sparse model
     sparse_model = SparseGemmModel(hidden)
-    assign_sparse_buffers(pytorch_model, sparse_model)
-
+    
     X_dense = Tensor(
         shape = [batch_size, hidden],
         name = "X_dense",
@@ -211,9 +210,12 @@ def benchmark(batch_size=1024, hidden=16):
     Y_sparse = sparse_model(X_sparse)
     Y_sparse._attrs["is_output"] = True
     Y_sparse._attrs["name"] = "Y_sparse"
+    sparse_model.name_parameter_tensor()
+    assign_sparse_buffers(pytorch_model, sparse_model)
 
     target = detect_target()
     dense_consts = map_pt_params(dense_model, pytorch_model)
+    '''
     with compile_model(
         Y_dense, target, "./tmp", "dense_model", constants=dense_consts
     ) as dense_module:
@@ -232,8 +234,11 @@ def benchmark(batch_size=1024, hidden=16):
         dense_time, _, _ = dense_module.benchmark_with_tensors(
             dense_inputs, dense_outputs, graph_mode=True, count=count
         )
+    '''
 
     sparse_consts = map_all_constants(sparse_model)
+    print("\n\nsparse const\n\n")
+    print(sparse_consts)
     with compile_model(
         Y_sparse, target, "./tmp", "sparse_model", constants=sparse_consts
     ) as sparse_module:
@@ -242,6 +247,8 @@ def benchmark(batch_size=1024, hidden=16):
         inputs = {"X_sparse": x}
         outputs = {"Y_sparse": y_sparse}
 
+        for name, arr in sparse_consts.items():
+            sparse_module.set_constant(name, arr) 
         sparse_module.run_with_tensors(inputs, outputs, graph_mode=True)
 
         if torch.allclose(y_sparse, y_pytorch, atol=1e-2, rtol=1e-2):

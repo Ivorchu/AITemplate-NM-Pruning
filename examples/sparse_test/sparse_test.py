@@ -237,8 +237,6 @@ def benchmark(batch_size=32, hidden=16):
     '''
 
     sparse_consts = map_all_constants(sparse_model)
-    print("\n\nsparse const\n\n")
-    print(sparse_consts)
     with compile_model(
         Y_sparse, target, "./tmp", "sparse_model", constants=sparse_consts
     ) as sparse_module:
@@ -247,8 +245,8 @@ def benchmark(batch_size=32, hidden=16):
         inputs = {"X_sparse": x}
         outputs = {"Y_sparse": y_sparse}
 
-        for name, arr in sparse_consts.items():
-            sparse_module.set_constant(name, arr) 
+        # for name, arr in sparse_consts.items():
+        #     sparse_module.set_constant(name, arr) 
         sparse_module.run_with_tensors(inputs, outputs, graph_mode=True)
 
         if torch.allclose(y_sparse, y_pytorch, atol=1e-2, rtol=1e-2):
@@ -261,7 +259,7 @@ def benchmark(batch_size=32, hidden=16):
         )
     
     print(f"PyTorch eager time: {pytorch_time} ms/iter")
-    print(f"Dense model time: {dense_time} ms/iter")
+    #print(f"Dense model time: {dense_time} ms/iter")
     print(f"Sparse model time: {sparse_time} ms/iter")
         
 

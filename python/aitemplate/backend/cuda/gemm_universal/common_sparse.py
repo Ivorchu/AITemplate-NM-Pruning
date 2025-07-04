@@ -226,6 +226,11 @@ void {{function_name}} (
     cudaStream_t stream
   ) {
   {{shape_eval}}
+
+    using Kernel = f5ffe533b830f08a0326348a9160afafc8ada44db;
+    int64_t raw_E = (K + Kernel::kElementsPerElementE - 1) / Kernel::kElementsPerElementE;
+    metadata_stride = ((raw_E + Kernel::kAlignmentE - 1) / Kernel::kAlignmentE) * Kernel::kAlignmentE;
+
   {{input_addr_calculator}}
   {{output_addr_calculator}}
 
@@ -907,7 +912,7 @@ using Operation_cutlass_tensorop_s16832spgemm_f16_128x128_64x6_nn_align8 = cutla
         float
     >,
     cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,
-    6,
+    2,
     8,
     8>;
     """

@@ -169,7 +169,7 @@ def map_all_constants(ait_model):
     return consts
 
     
-def benchmark(batch_size=32, hidden=16):
+def benchmark(batch_size=32, hidden=64):
     # create pytorch model
     pytorch_model = PytorchModel(hidden).cuda().half()
 
@@ -214,8 +214,9 @@ def benchmark(batch_size=32, hidden=16):
     assign_sparse_buffers(pytorch_model, sparse_model)
 
     target = detect_target()
+    target._kwargs["alignment_constraints"] = [1, 2, 4, 8]
     dense_consts = map_pt_params(dense_model, pytorch_model)
-    '''
+    
     with compile_model(
         Y_dense, target, "./tmp", "dense_model", constants=dense_consts
     ) as dense_module:
@@ -234,7 +235,7 @@ def benchmark(batch_size=32, hidden=16):
         dense_time, _, _ = dense_module.benchmark_with_tensors(
             dense_inputs, dense_outputs, graph_mode=True, count=count
         )
-    '''
+    
 
     sparse_consts = map_all_constants(sparse_model)
     with compile_model(
@@ -259,7 +260,7 @@ def benchmark(batch_size=32, hidden=16):
         )
     
     print(f"PyTorch eager time: {pytorch_time} ms/iter")
-    #print(f"Dense model time: {dense_time} ms/iter")
+    print(f"Dense model time: {dense_time} ms/iter")
     print(f"Sparse model time: {sparse_time} ms/iter")
         
 

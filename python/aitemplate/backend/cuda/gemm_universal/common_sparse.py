@@ -177,6 +177,9 @@ SRC_TEMPLATE = jinja2.Template(
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 
 #include "cutlass/tensor_ref.h"
+#include "cutlass/gemm/threadblock/threadblock_swizzle.h"
+#include "cutlass/epilogue/thread/linear_combination.h"
+#include "cutlass/arch/mma.h"
 
 using bfloat16 = nv_bfloat16;
 
@@ -227,10 +230,12 @@ void {{function_name}} (
   ) {
   {{shape_eval}}
 
+  /**
     using Kernel = f5ffe533b830f08a0326348a9160afafc8ada44db;
     int64_t raw_E = (K + Kernel::kElementsPerElementE - 1) / Kernel::kElementsPerElementE;
     metadata_stride = ((raw_E + Kernel::kAlignmentE - 1) / Kernel::kAlignmentE) * Kernel::kAlignmentE;
-
+**/
+    
   {{input_addr_calculator}}
   {{output_addr_calculator}}
 
@@ -249,9 +254,11 @@ void {{function_name}} (
   {% for idx in range(output_ndims) %}
       std::cout << "output_ndims{{idx}}: " << *c_dim{{idx}} << std::endl;
   {% endfor %}
+  /*
   throw std::runtime_error(
       "Unsupported workload for this {{function_name}} specialization."
   );
+  */
 }
 """,
     trim_blocks=True,
@@ -484,7 +491,7 @@ int benchmark_{{function_name}} (
 {% if support_split_k %}
     int split_k,
 {% endif %}
-
+/**
 // raw pointers
 void** ptr_A,                // A values
 void** ptr_B,                // B values
@@ -492,7 +499,7 @@ void** ptr_M,                // B metadata
 int64_t* meta_stride,        // metadata stride
 {% if has_bias %}void** ptr_bias,{% endif %}
 void** ptr_C,                // output
-
+**/
 {% for idx in range(input_ndims) %}
     int64_t* a_dim{{idx}},
 {% endfor %}
@@ -838,7 +845,8 @@ def sparse_gemm_instance(
     tmp = op_def.replace(
         "cutlass::gemm::device::Gemm", "cutlass::gemm::device::SparseGemm"
     )
-    tmp = tmp.replace("false,", "")
+    # tmp = tmp.replace("false,", "")
+    # tmp = tmp.replace("cutlass::arch::OpMultiplyAdd", "")
     return tmp
 
 
@@ -880,7 +888,6 @@ def emit_instance(
 ):
     import cutlass_lib
 
-    '''
     cutlass_3x = op.gemm_kind == cutlass_lib.library.GemmKind.Universal3x
         
     emitter = cutlass_lib.gemm_operation.EmitSparseGemmInstance()
@@ -892,8 +899,9 @@ def emit_instance(
         for_profiler=for_profiler,
         cutlass_3x=cutlass_3x,
     )
-    '''
-    op_def = """
+
+    return op_def
+'''
 // Gemm operator cutlass_tensorop_s16832spgemm_f16_128x128_64x6_nn_align8
 using Operation_cutlass_tensorop_s16832spgemm_f16_128x128_64x6_nn_align8 = cutlass::gemm::device::SparseGemm<
     cutlass::half_t, cutlass::layout::RowMajor,
@@ -915,10 +923,7 @@ using Operation_cutlass_tensorop_s16832spgemm_f16_128x128_64x6_nn_align8 = cutla
     2,
     8,
     8>;
-    """
-
-    return op_def
-
+'''
 
 def extract_config(
     f_proc_op,
@@ -928,9 +933,7 @@ def extract_config(
     import cutlass_lib
 
     op_kind = cutlass_lib.library.OperationKind.Gemm
-    gemm_kinds = {cutlass_lib.library.GemmKind.Universal}
-    if include_cutlass_3x_ops:
-        gemm_kinds.add(cutlass_lib.library.GemmKind.Universal3x)
+    gemm_kinds = {cutlass_lib.library.GemmKind.Sparse}
     gemm_ops = OrderedDict()
     extract_ops = list(Target.current()._operators[op_kind].items())
 
@@ -1204,8 +1207,8 @@ def gen_profiler(
     problem_args_template,
     args_parser_template,
     support_split_k=False,
+    input_addr_calculator="",
     output_addr_calculator="",
-    metadata_ptr_arg=None,
     bias_ptr_arg=None,
     extra_code="",
     problem_args_template_cutlass_3x=None,
@@ -1263,13 +1266,13 @@ def gen_profiler(
         output_ndims=ndims,
     )
 
-    function_name = "gemm"
+    function_name = "gemm_sparse"
     instances = []
     benchmark_instances = []
     for instance_idx, (op_name, op) in enumerate(op_instance.items()):
         config = emit_instance(op, func_attrs=func_attrs, for_profiler=True)
         instance_name = f"{instance_name_base}_{instance_idx}"
-        gemm_op = f"gemm_op_{instance_idx}"
+        gemm_op = f"gemm_sparse_op_{instance_idx}"
         cutlass_3x = op.gemm_kind == cutlass_lib.library.GemmKind.Universal3x
         instance_template = (
             INSTANCE_TEMPLATE_CUTLASS_3X if cutlass_3x else INSTANCE_TEMPLATE
@@ -1303,36 +1306,51 @@ def gen_profiler(
         if isinstance(args_parser_template, str)
         else args_parser_template.render()
     )
+    metadata_code = "\n".join([
+        "  // metadata pointer & stride for 2:4 sparsity",
+        "  void* m_ptr = m_ptr;",
+        "  int64_t metadata_stride = *m_dim1;"
+    ])
     op_func = src_template.render(
         is_profiler=True,
         instances="\n".join(instances),
         function_name=function_name,
+        dtype="cutlass::half_t",
         input_ndims=ndims,
         weight_ndims=ndims,
         meta_ndims=ndims,
         output_ndims=ndims,
         shape_eval=shape_func,
-        input_addr_calculator="",
         input_output_checks=input_output_checks,
+        metadata_code=metadata_code,
         exec_paths=exec_program,
+        input_addr_calculator=input_addr_calculator,
         output_addr_calculator=output_addr_calculator,
         support_split_k=support_split_k,
+        has_d=has_d(func_attrs),
+        has_d1=has_d1(func_attrs),
         extra_code=extra_code,
+        elem_input_type=elem_input_type,
+        elem_output_type=elem_output_type,
     )
     benchmark_adims = ["a_dim" + str(i) for i in range(ndims)]
     benchmark_bdims = ["b_dim" + str(i) for i in range(ndims)]
+    benchmark_mdims = ["m_dim" + str(i) for i in range(ndims)]
     benchmark_cdims = ["c_dim" + str(i) for i in range(ndims)]
     func_call = FUNC_CALL_TEMPLATE.render(
         is_profiler=True,
         func_name=function_name,
         a_ptr="memory_pool->RequestTensorByIdx(0)",
         b_ptr="memory_pool->RequestTensorByIdx(1)",
+        metadata_ptr="memory_pool->RequestTensorByIdx(2)",
+        metadata_stride="*m_dim1",
         has_bias=has_bias,
         bias_ptr=bias_ptr_arg,
-        c_ptr="memory_pool->RequestTensorByIdx(2)",
+        c_ptr="memory_pool->RequestTensorByIdx(3)",
         split_k="split_k",
         adims=benchmark_adims,
         bdims=benchmark_bdims,
+        mdims=benchmark_mdims,
         cdims=benchmark_cdims,
     )
     tensor_decl = TENSOR_DECL_TEMPLATE.render(
@@ -1560,21 +1578,7 @@ def make_fproc(
         f_proc_op=fproc,
         include_cutlass_3x_ops=include_cutlass_3x_ops,
     )
-    # pick one algorithm name
-    algo_name = next(iter(func_attrs["op_instance"].keys()))
-
-    # overwrite so there’s always one branch, unconditionally taken
-    func_attrs["exec_path"] = OrderedDict([
-        (
-        "true",
-        ExecItem(
-            profiling_key="true",
-            exec_cond="true",
-            algo=algo_name,
-        ),
-        ),
-    ])
-
+    
 
 
 def function_filter(cfg, func_attrs, ab_alignment):

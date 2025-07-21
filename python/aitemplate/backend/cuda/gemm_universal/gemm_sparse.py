@@ -111,27 +111,27 @@ PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
 PROFILER_PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     """
     // 1) problem size
-    cutlass::gemm::GemmCoord{ M, N, K * 2},
-    
-    // 3) ref_B  
-    { ({{elem_input_type}} const*)(b_ptr) + input_b_offset,
-    input_b_batch_stride, input_b_stride },
-    
-    // 2) ref_A
-    { ({{elem_input_type}} const*)(a_ptr) + input_a_offset,
-    input_a_batch_stride, input_a_stride },
+    cutlass::gemm::GemmCoord{ M, N, K },
+
+    // 2) ref_B  
+    { (cutlass::half_t const*)(b_ptr) + input_b_offset,
+    input_b_batch_stride },
+
+    // 3) ref_A
+    { (cutlass::half_t const*)(a_ptr) + input_a_offset,
+    input_a_batch_stride },
 
     // 4) ref_C  
-    { ({{elem_output_type}}*)(c_ptr) + output_offset,
-    M * N, output_stride },
+    { (cutlass::half_t*)(c_ptr) + output_offset,
+    M * N },
 
     // 5) ref_D  (same as C for inplace)  
-    { ({{elem_output_type}}*)(c_ptr) + output_offset,
-    M * N, output_stride },
+    { (cutlass::half_t*)(c_ptr) + output_offset,
+    M * N },
 
     // 6) ref_E  (the 2:4 metadata)  
-    { ({{elem_meta_type}}*)(m_ptr) + input_m_offset,
-    input_m_batch_stride, input_m_stride },
+    { (ElementE*)(m_ptr) + input_m_offset,
+    input_m_batch_stride },
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
@@ -182,34 +182,11 @@ PROFILER_PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
 @registry.reg("cuda.gemm_sparse.config")
 def gemm_sparse_config(func_attrs, dtype="float16"):
     # 1) build the full op_instance list
-    common_sparse.make_fproc(func_attrs, RCR, include_cutlass_3x_ops=True)
+    common_sparse.make_fproc(func_attrs, RCR, include_cutlass_3x_ops=False)
 
     # 2) your metadata plumbing
     func_attrs["metadata"] = func_attrs["input_accessors"][2]
     func_attrs["metadata_stride"] = func_attrs["inputs"][2]._attrs["shape"][-1]
-
-    # 3) disable residual for any 3.x kernels (your existing loop)
-    import cutlass_lib
-    for op in func_attrs["op_instance"].values():
-        if op.gemm_kind == cutlass_lib.library.GemmKind.Universal3x:
-            op.C.element = cutlass_lib.library.DataType.void
-
-    # 4) pick exactly one algorithm from op_instance
-    algo_name, algo_inst = next(iter(func_attrs["op_instance"].items()))
-    func_attrs["op_instance"] = OrderedDict([(algo_name, algo_inst)])
-
-    # 5) register an exec_path that always fires
-    func_attrs["exec_path"] = OrderedDict([
-      (
-        "true",
-        ExecItem(
-          profiling_key="true",
-          exec_cond="true",      # this branch will always be taken
-          algo=algo_name,
-        ),
-      ),
-    ])
-    func_attrs["has_profiler"] = False
 
 
 def common_gen_profiler(
@@ -220,12 +197,13 @@ def common_gen_profiler(
     src_template,
     problem_args_template,
     problem_args_template_cutlass_3x=None,
-    metadata_ptr_arg=None,
     bias_ptr_arg=None,
     extra_code="",
 ):
+    input_addr_calculator = get_input_addr_calculator(func_attrs)
     output_addr_calculator = common_sparse.DEFAULT_OUTPUT_ADDR_CALCULATOR.render(
-        stride_dim="*b_dim0"
+        output_batch_stride_dim="M * N",
+        output_stride_dim="N",
     )
     return common_sparse.gen_profiler(
         func_attrs=func_attrs,
@@ -237,8 +215,8 @@ def common_gen_profiler(
         problem_args_template_cutlass_3x=problem_args_template_cutlass_3x,
         args_parser_template=ARGS_PARSER_TEMPLATE,
         support_split_k=True,
+        input_addr_calculator=input_addr_calculator,
         output_addr_calculator=output_addr_calculator,
-        metadata_ptr_arg=metadata_ptr_arg,
         bias_ptr_arg=bias_ptr_arg,
         extra_code=extra_code,
     )
@@ -246,64 +224,6 @@ def common_gen_profiler(
 
 @registry.reg("cuda.gemm_sparse.gen_profiler")
 def gen_profiler(func_attrs, workdir, profiler_filename, dim_info_dict):
-
-    import cutlass_lib
-
-    # 1) build your cutlass‐type tuple from AIT dtype
-    spec = CUDASpec()
-    A_type = spec.dtype_to_lib_type(func_attrs["inputs"][0]._attrs["dtype"])
-    B_type = spec.dtype_to_lib_type(func_attrs["inputs"][1]._attrs["dtype"])
-    C_type = spec.dtype_to_lib_type(func_attrs["outputs"][0]._attrs["dtype"])
-    accum = spec.dtype_to_lib_type("float32")
-    data_type = (A_type, B_type, C_type, accum)
-
-    # 2) reuse the *dense* GEMM tile descriptions & alignments
-    td = Target.current()._kwargs["tile_descriptions"]
-    ac = Target.current()._kwargs["alignment_constraints"]
-
-    # 3) generate only Sparse‐Gemm ops via the CUTLASS Python generator
-    manifest = []
-    sparse_ops = cutlass_lib.generator.CreateSparseGemmOperator(
-        manifest,
-        layouts=[ func_attrs["layout"].cutlass_lib_layouts() ],  # RCR, RCC, etc.
-        tile_descriptions=td,
-        data_type=data_type,
-        alignment_constraints=ac,
-    )
-
-    # 4) key them by the canonical CUTLASS name
-    op_dict = OrderedDict((kernel_name(op), op) for op in sparse_ops)
-
-    # 5) drop any 3.x kernels that don’t fit your layout/align
-    op_dict, _ = filter_cutlass_3x_ops(op_dict, func_attrs)
-
-    func_attrs["op_instance"] = op_dict
-
-    # 6) pick exactly one algo and bake in a always‐true exec_path
-    algo_name = next(iter(op_dict))
-    func_attrs["exec_path"] = OrderedDict([
-        ("true", ExecItem("true", "true", algo_name))
-    ])
-
-    # 7) now hand off to AIT’s built‐in sparse‐GEMM profiler generator
-    return common_sparse.gen_profiler(
-        func_attrs=func_attrs,
-        workdir=workdir,
-        profiler_filename=profiler_filename,
-        dim_info_dict=dim_info_dict,
-        src_template=common_sparse.SRC_TEMPLATE,
-        problem_args_template=common_sparse.PROFILER_PROBLEM_ARGS_TEMPLATE,
-        problem_args_template_cutlass_3x=common_sparse.PROFILER_PROBLEM_ARGS_TEMPLATE_CUTLASS_3X,
-        args_parser_template=common_sparse.ARGS_PARSER_TEMPLATE,
-        support_split_k=True,
-        output_addr_calculator=common_sparse.DEFAULT_OUTPUT_ADDR_CALCULATOR.render(
-            output_batch_stride_dim="*b_dim0 * N",
-            output_stride_dim="*b_dim0"
-        ),
-        metadata_ptr_arg="ptr_M",
-        bias_ptr_arg=None,
-    )
-
     return common_gen_profiler(
         func_attrs=func_attrs,
         workdir=workdir,
@@ -359,147 +279,12 @@ def get_input_addr_calculator(func_attrs):
     return input_addr_calculator
 
 
-def gen_exec_op(func_attrs):
-    import cutlass_lib
-
-    '''
-    # 1) grab our current arch & cuda version
-    tgt = Target.current()
-    arch = tgt._arch                                # e.g. "80"
-    cuda_version = tgt._cuda_version or "11.4.2"
-
-    # 2) build CUTLASS manifest via AIT’s gen_cutlass_ops helper
-    #    this will give us manifest.operations
-    from aitemplate.backend.cuda.utils import mk_cutlass_lib
-    registry.get("cuda.make_cutlass_lib")(tgt.template_path())
-    gen_ops = registry.get("cuda.gen_cutlass_ops")
-    all_ops = gen_ops(arch, cuda_version,
-                      allow_cutlass_sm90=tgt._kwargs.get("allow_cutlass_sm90", False),
-                      force_cutlass_sm90=tgt._kwargs.get("force_cutlass_sm90", False))
-
-    # 3) extract only the GemmKind.Sparse ops
-    gemm_by_cfg = all_ops[cutlass_lib.library.OperationKind.Gemm]
-    sparse_ops = []
-    for cfg_name, ops in gemm_by_cfg.items():
-        for op in ops:
-            if op.gemm_kind == cutlass_lib.library.GemmKind.Sparse:
-                sparse_ops.append(op)
-
-    # 4) key by canonical name
-    op_dict = OrderedDict((kernel_name(op), op) for op in sparse_ops)
-
-    # 5) drop any 3.x kernels that don’t match our tensor-accessor alignments
-    op_dict, _ = filter_cutlass_3x_ops(op_dict, func_attrs)
-    # but ignore the 3.x entries entirely:
-    op_dict = {k:v for k,v in op_dict.items() if v.gemm_kind != cutlass_lib.library.GemmKind.Universal3x}
-
-    # 6) install into func_attrs
-    func_attrs["op_instance"] = op_dict
-
-    # pick exactly one algorithm and bake in an always-true guard
-    algo = next(iter(op_dict.keys()))
-    func_attrs["exec_path"] = OrderedDict([
-        ("true", ExecItem("true", "true", algo))
-    ])
-
-    return func_attrs["exec_path"]
-    '''
-    '''
-     # 1) Build the CUTLASS data‐type tuple
-    spec = CUDASpec()
-    A_type = spec.dtype_to_lib_type(func_attrs["inputs"][0]._attrs["dtype"])
-    B_type = spec.dtype_to_lib_type(func_attrs["inputs"][1]._attrs["dtype"])
-    C_type = spec.dtype_to_lib_type(func_attrs["outputs"][0]._attrs["dtype"])
-    # accumulate in the same type as A/B
-    accum = A_type
-    data_type = (A_type, B_type, C_type, accum)
-
-    # 2) Grab your target’s tile descriptions & alignments
-    target = Target.current()
-    td = target._kwargs["tile_descriptions"]
-    ac = target._kwargs["alignment_constraints"]
-
-    # 3) Invoke CUTLASS’s Python generator for sparse‐Gemm
-    manifest_list = []
-    layout = func_attrs["layout"].cutlass_lib_layouts()
-    sparse_ops = cutlass_lib.generator.CreateSparseGemmOperator(
-        manifest_list,
-        layouts=[layout],
-        tile_descriptions=td,
-        data_type=data_type,
-        alignment_constraints=ac,
-    )
-
-    # 4) Key them by name and drop any 3.x kernels
-    op_dict = OrderedDict((kernel_name(op), op) for op in sparse_ops)
-    op_dict, _ = filter_cutlass_3x_ops(op_dict, func_attrs)
-
-    func_attrs["op_instance"] = op_dict
-
-    # 5) Pick one of the algos as your fallback exec_path
-    first_algo = next(iter(op_dict.keys()))
-    func_attrs["exec_path"] = OrderedDict([
-        (
-            # you said you only care about M=1024,N=64,K=16
-            "M == 1024 && N == 64 && K == 16",
-            ExecItem(
-                profiling_key="M == 1024 && N == 64 && K == 16",
-                exec_cond="M == 1024 && N == 64 && K == 16",
-                algo=first_algo,
-            ),
-        )
-    ])
-
-    # 6) Finally, stash away the metadata‐stride so your func_call template can see it
-    meta_accessor = func_attrs["input_accessors"][2]
-    func_attrs["metadata_stride"] = meta_accessor.stride(
-        len(meta_accessor.original_shapes) - 2
-    )
-    '''
-     # grab the CUTLASS‐generated ops from the current CUDA target
-    target = Target.current()
-    ops_by_kind = target._operators
-
-    # all GEMM ops (dense + sparse + 3x) live under OperationKind.Gemm
-    gemm_cfgs = ops_by_kind.get(cutlass_lib.library.OperationKind.Gemm, {})
-
-    # flatten and pick only the sparse GEMMs
-    sparse_ops = [
-        op
-        for cfg_ops in gemm_cfgs.values()
-        for op in cfg_ops
-        if op.gemm_kind == cutlass_lib.library.GemmKind.Sparse
-    ]
-
-    if not sparse_ops:
-        raise RuntimeError("No sparse‐GEMM kernels found in target._operators")
-
-    # key them by their canonical CUTLASS name
-    func_attrs["op_instance"] = OrderedDict(
-        (kernel_name(op), op) for op in sparse_ops
-    )
-
-    # pick the first algo for a single‐path exec
-    first_algo = next(iter(func_attrs["op_instance"]))
-    func_attrs["exec_path"] = OrderedDict([
-        ("true", ExecItem("true", "true", first_algo))
-    ])
-
-    # compute metadata_stride from the 3rd input accessor’s last dim
-    meta_acc = func_attrs["input_accessors"][2]
-    last_dim = len(meta_acc.original_shapes) - 1
-    func_attrs["metadata_stride"] = meta_acc.stride(last_dim)
-
-
-
 @registry.reg("cuda.gemm_sparse.gen_function")
 def gen_function(
     func_attrs,
     exec_cond_template,
     dim_info_dict,
 ):
-    gen_exec_op(func_attrs)
-
     input_addr_calculator = get_input_addr_calculator(func_attrs)
     input_ndims = len(func_attrs["input_accessors"][0].original_shapes)
     weight_ndims = len(func_attrs["input_accessors"][1].original_shapes)

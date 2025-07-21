@@ -505,7 +505,6 @@ class gemm(Operator):
         func_key = "{target}.{op}.filter".format(
             target=target.name(), op=self._attrs["op"]
         )
-
         # Update epilogue alignment here because it may be different depending on the profiling strategy.
         # Note that this alignment is only used in profiling and will be updated
         # during the final codegen.

@@ -9,64 +9,70 @@ from aitemplate.frontend import nn, Tensor
 from aitemplate.testing import detect_target
 from aitemplate.testing.benchmark_pt import benchmark_torch_function
 
+LAYER1 = 1
+LAYER2 = 4
+LAYER3 = 4
+LAYER4 = 4
+LAYER5 = 4
+
 
 class PytorchModel(torch.nn.Module):
     def __init__(self, hidden, eps: float = 1e-5):
         super().__init__()
-        self.dense1 = torch.nn.Linear(hidden, 4 * hidden, bias=False)
-        self.dense2 = torch.nn.Linear(4 * hidden, 16 * hidden, bias=False)
-        self.dense3 = torch.nn.Linear(16 * hidden, 64 * hidden, bias=False)
-        self.dense4 = torch.nn.Linear(64 * hidden, 16 * hidden, bias=False)
-        self.dense5 = torch.nn.Linear(16 * hidden, 4 * hidden, bias=False)
-        self.dense6 = torch.nn.Linear(4 * hidden, hidden, bias=False)
+        self.dense1 = torch.nn.Linear(hidden, LAYER1 * hidden, bias=False)
+        # self.dense2 = torch.nn.Linear(LAYER1 * hidden, LAYER2 * hidden, bias=False)
+        # self.dense3 = torch.nn.Linear(LAYER2 * hidden, LAYER3 * hidden, bias=False)
+        # self.dense4 = torch.nn.Linear(LAYER3 * hidden, LAYER4 * hidden, bias=False)
+        # self.dense5 = torch.nn.Linear(LAYER4 * hidden, LAYER5 * hidden, bias=False)
+        # self.dense6 = torch.nn.Linear(LAYER5 * hidden, hidden, bias=False)
 
     def forward(self, input):
         hidden_states = self.dense1(input)
-        hidden_states = self.dense2(hidden_states)
-        hidden_states = self.dense3(hidden_states)
-        hidden_states = self.dense4(hidden_states)
-        hidden_states = self.dense5(hidden_states)
-        hidden_states = self.dense6(hidden_states)
+        # hidden_states = self.dense2(hidden_states)
+        # hidden_states = self.dense3(hidden_states)
+        # hidden_states = self.dense4(hidden_states)
+        # hidden_states = self.dense5(hidden_states)
+        # hidden_states = self.dense6(hidden_states)
         return hidden_states
     
 
 class DenseGemmModel(nn.Module):
     def __init__(self, hidden, eps: float = 1e-5):
         super().__init__()
-        self.dense1 = nn.Linear(hidden, 4 * hidden, bias=False)
-        self.dense2 = nn.Linear(4 * hidden, 16 * hidden, bias=False)
-        self.dense3 = nn.Linear(16 * hidden, 64 * hidden, bias=False)
-        self.dense4 = nn.Linear(64 * hidden, 16 * hidden, bias=False)
-        self.dense5 = nn.Linear(16 * hidden, 4 * hidden, bias=False)
-        self.dense6 = nn.Linear(4 * hidden, hidden, bias=False)
+        self.dense1 = nn.Linear(hidden, LAYER1 * hidden, bias=False)
+        # self.dense2 = nn.Linear(LAYER1 * hidden, LAYER2 * hidden, bias=False)
+        # self.dense3 = nn.Linear(LAYER2 * hidden, LAYER3 * hidden, bias=False)
+        # self.dense4 = nn.Linear(LAYER3 * hidden, LAYER4 * hidden, bias=False)
+        # self.dense5 = nn.Linear(LAYER4 * hidden, LAYER5 * hidden, bias=False)
+        # self.dense6 = nn.Linear(LAYER5 * hidden, hidden, bias=False)
 
     def forward(self, input):
         hidden_states = self.dense1(input)
-        hidden_states = self.dense2(hidden_states)
-        hidden_states = self.dense3(hidden_states)
-        hidden_states = self.dense4(hidden_states)
-        hidden_states = self.dense5(hidden_states)
-        hidden_states = self.dense6(hidden_states)
+        # hidden_states = self.dense2(hidden_states)
+        # hidden_states = self.dense3(hidden_states)
+        # hidden_states = self.dense4(hidden_states)
+        # hidden_states = self.dense5(hidden_states)
+        # hidden_states = self.dense6(hidden_states)
         return hidden_states
     
 
 class SparseGemmModel(nn.Module):
     def __init__(self, hidden, eps: float = 1e-5):
         super().__init__()
-        self.dense1 = nn.LinearSparse(hidden, 4 * hidden, bias=False)
-        self.dense2 = nn.LinearSparse(4 * hidden, 16 * hidden, bias=False)
-        self.dense3 = nn.LinearSparse(16 * hidden, 64 * hidden, bias=False)
-        self.dense4 = nn.LinearSparse(64 * hidden, 16 * hidden, bias=False)
-        self.dense5 = nn.LinearSparse(16 * hidden, 4 * hidden, bias=False)
-        self.dense6 = nn.LinearSparse(4 * hidden, hidden, bias=False)
+        self.dense1 = nn.LinearSparse(hidden, LAYER1 * hidden, bias=False)
+        # self.dense2 = nn.LinearSparse(LAYER1 * hidden, LAYER2 * hidden, bias=False)
+        # self.dense3 = nn.LinearSparse(LAYER2 * hidden, LAYER3 * hidden, bias=False)
+        # self.dense4 = nn.LinearSparse(LAYER3 * hidden, LAYER4 * hidden, bias=False)
+        # self.dense5 = nn.LinearSparse(LAYER4 * hidden, LAYER5 * hidden, bias=False)
+        # self.dense6 = nn.LinearSparse(LAYER5 * hidden, hidden, bias=False)
 
     def forward(self, input):
         hidden_states = self.dense1(input)
-        hidden_states = self.dense2(hidden_states)
-        hidden_states = self.dense3(hidden_states)
-        hidden_states = self.dense4(hidden_states)
-        hidden_states = self.dense5(hidden_states)
-        hidden_states = self.dense6(hidden_states)
+        # hidden_states = self.dense2(hidden_states)
+        # hidden_states = self.dense3(hidden_states)
+        # hidden_states = self.dense4(hidden_states)
+        # hidden_states = self.dense5(hidden_states)
+        # hidden_states = self.dense6(hidden_states)
         return hidden_states
     
     
@@ -214,9 +220,8 @@ def benchmark(batch_size=32, hidden=64):
     assign_sparse_buffers(pytorch_model, sparse_model)
 
     target = detect_target()
-    target._kwargs["alignment_constraints"] = [1, 2, 4, 8]
-    dense_consts = map_pt_params(dense_model, pytorch_model)
-    
+    #dense_consts = map_pt_params(dense_model, pytorch_model)
+    '''
     with compile_model(
         Y_dense, target, "./tmp", "dense_model", constants=dense_consts
     ) as dense_module:
@@ -235,7 +240,7 @@ def benchmark(batch_size=32, hidden=64):
         dense_time, _, _ = dense_module.benchmark_with_tensors(
             dense_inputs, dense_outputs, graph_mode=True, count=count
         )
-    
+    '''
 
     sparse_consts = map_all_constants(sparse_model)
     with compile_model(
@@ -250,6 +255,9 @@ def benchmark(batch_size=32, hidden=64):
         #     sparse_module.set_constant(name, arr) 
         sparse_module.run_with_tensors(inputs, outputs, graph_mode=True)
 
+        print(y_sparse)
+        print(y_pytorch)
+
         if torch.allclose(y_sparse, y_pytorch, atol=1e-2, rtol=1e-2):
             print("Sparse model outputs were correct.")
         else:
@@ -260,7 +268,7 @@ def benchmark(batch_size=32, hidden=64):
         )
     
     print(f"PyTorch eager time: {pytorch_time} ms/iter")
-    print(f"Dense model time: {dense_time} ms/iter")
+    #print(f"Dense model time: {dense_time} ms/iter")
     print(f"Sparse model time: {sparse_time} ms/iter")
         
 

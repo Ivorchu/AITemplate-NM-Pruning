@@ -1,5 +1,6 @@
 from aitemplate.compiler.base import IntImm, Tensor, ExecItem
 from aitemplate.compiler.ops.gemm_universal import gemm_common as common
+
 from aitemplate.compiler.tensor_accessor import TensorAccessor
 
 from collections import OrderedDict
@@ -14,7 +15,6 @@ class gemm_sparse(common.gemm):
             return common.default_align_ab(k, k, self._attrs["inputs"][0].dtype())
 
         self._attrs["f_ab_alignment"] = cal_align_ab
-
 
     def _infer_shapes(self, a: Tensor, b: Tensor):
         return a._attrs["shape"][:-1] + [b._attrs["shape"][0]]
@@ -67,7 +67,7 @@ class gemm_sparse(common.gemm):
         k4 = b_meta._attrs["shape"][-1]
         if not isinstance(ak, IntImm):
             raise RuntimeError(f"K must be static, got {ak}")
-        if 2 * k2 != ak or 4*k4 != ak:
+        if 2 * k2 != ak or k4*2*8 != ak:
             raise RuntimeError(
                 f"Compressed B shapes must match a. "
                 f"A.k={ak}, Bv.k={k2}, Bm.k={k4}"

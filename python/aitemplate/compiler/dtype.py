@@ -25,6 +25,7 @@ _DTYPE2BYTE = {
     "int32": 4,
     "int64": 8,
     "bfloat16": 2,
+    "uint8": 1,
 }
 
 
@@ -42,6 +43,7 @@ _DTYPE_TO_ENUM = {
     "int64": 4,
     "bool": 5,
     "bfloat16": 6,
+    "uint8": 1,
 }
 
 

@@ -21,28 +21,32 @@ using elem_metadata_type = {{elem_metadata_type}};
 # used for real execution
 PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     """
-    cutlass::gemm::GemmUniversalMode::kGemm,
-    cutlass::gemm::GemmCoord{ M,N,K },
-    split_k,
-    {ElementComputeEpilogue(1), ElementComputeEpilogue(1)},
+    cutlass::gemm::GemmCoord{
+        static_cast<coord_t>(M),
+        static_cast<coord_t>(N),
+        static_cast<coord_t>(K)
+    },                                                       // GemmCoord problem_size
 
-    // ---- pointers ----
-    ({{elem_input_type}}*)(a_ptr)    + input_a_offset,   // A
-    ({{elem_input_type}}*)(b_ptr)    + input_b_offset,   // B values
-    (uint8_t*)(m_ptr),                                   // B metadata
-    ({{elem_input_type}}*)(bias_ptr),                    // bias (C)
-    ({{elem_output_type}}*)(c_ptr) + output_offset,      // D
+    { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },// Epilogue params
+    split_k,                                                 // int batch_count
 
-    // ---- strides ----
-    input_a_batch_stride,                 // batch_stride_A
-    input_b_batch_stride,                 // batch_stride_B
-    metadata_stride,                      // batch_stride_C (metadata)
-    M * N,                                 // batch_stride_D
+    // ---- pointers block ----
+    ({{elem_input_type}}*)(a_ptr) + input_a_offset,          // ptr_A
+    ({{elem_input_type}}*)(b_ptr) + input_b_offset,          // ptr_B
+    (uint8_t*)(m_ptr),                                       // ptr_B_meta
+    ({{elem_bias_type}}*)(bias_ptr),                         // ptr_bias ← new!
+    ({{elem_output_type}}*)(c_ptr) + output_offset,          // ptr_C (output)
 
-    input_a_stride,                       // lda
-    input_b_stride,                       // ldb
-    metadata_stride,                      // ldc (metadata stride)
-    output_stride                         // ldd
+    // ---- strides block ----
+    input_a_batch_stride,                                    // batch_stride_A
+    input_b_batch_stride,                                    // batch_stride_B
+    metadata_stride,                                         // batch_stride_meta
+    /*output_batch_stride*/ M * N,                           // batch_stride_C
+
+    input_a_stride,                                          // lda
+    input_b_stride,                                          // ldb
+    metadata_stride,                                         // ldm (meta)
+    output_stride                                           // ldc
 """
 )
 
@@ -51,66 +55,38 @@ PROBLEM_ARGS_TEMPLATE = jinja2.Template(
 # column-major bias vector through the bias + elementwise epilogue (not residual)
 PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
     """
-    cutlass::gemm::GemmUniversalMode::kGemm,                     // GemmUniversalMode mode
-{% if has_tma_epilogue %}
     {
-        static_cast<coord_t>(N),
-        static_cast<coord_t>(M),
-        static_cast<coord_t>(K),
-        static_cast<coord_t>(1)
-    },                                                           // ProblemShape problem_shape
+      static_cast<coord_t>(N),
+      static_cast<coord_t>(M),
+      static_cast<coord_t>(K),
+      static_cast<coord_t>(1)
+    },                                                           // ProblemShape
 
-    // B values as A
+    // A ← B values
     ({{elem_input_type}}*)(b_ptr) + input_b_offset,
-    {input_b_stride, cute::Int<1>{}, cute::Int<0>{}},
+    { input_b_batch_stride, cute::Int<1>{}, cute::Int<0>{} },
 
     // B metadata
-    ({{elem_metadata_type}}*)(metadata_ptr),
-    {metadata_stride, cute::Int<1>{}, cute::Int<0>{}},
+    (uint8_t*)(metadata_ptr),
+    { metadata_stride, cute::Int<1>{}, cute::Int<0>{} },
 
-    // A as B
+    // bias
+    ({{elem_bias_type}}*)(bias_ptr),                             // ptr_bias ← new!
+
+    // B ← A values
     ({{elem_input_type}}*)(a_ptr) + input_a_offset,
-    {input_a_stride, cute::Int<1>{}, cute::Int<0>{}},
+    { input_a_batch_stride, cute::Int<1>{}, cute::Int<0>{} },
 
-    // Epilogue args...
+    // no C input (we’re fusing into D only), D ← C out
     {
-        {ElementComputeEpilogue(1), ElementComputeEpilogue(0)},
-        nullptr,
-        {cute::Int<1>{}, cute::Int<0>{}, cute::Int<0>{}},
-        ({{elem_output_type}}*)(c_ptr) + output_offset,
-        {cute::Int<1>{}, output_stride, cute::Int<0>{}},
-        ({{elem_input_type}}*)(bias_ptr)
+      { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
+      nullptr,
+      { cute::Int<0>{}, cute::Int<0>{}, cute::Int<0>{} },
+      ({{elem_output_type}}*)(c_ptr) + output_offset,
+      { output_stride, cute::Int<1>{}, cute::Int<0>{} }
     },
-{% else %}
-    {
-        static_cast<coord_t>(M),
-        static_cast<coord_t>(N),
-        static_cast<coord_t>(K),
-        static_cast<coord_t>(1)
-    },                                                           // ProblemShape problem_shape
 
-    // A
-    ({{elem_input_type}}*)(a_ptr) + input_a_offset,
-    {input_a_stride, cute::Int<1>{}, cute::Int<0>{}},
-
-    // B values
-    ({{elem_input_type}}*)(b_ptr) + input_b_offset,
-    {input_b_stride, cute::Int<1>{}, cute::Int<0>{}},
-
-    // B metadata
-    ({{elem_metadata_type}}*)(metadata_ptr),
-    {metadata_stride, cute::Int<1>{}, cute::Int<0>{}},
-
-    // Epilogue args...
-    {
-        {ElementComputeEpilogue(1), ElementComputeEpilogue(1)},
-        ({{elem_input_type}}*)(bias_ptr),
-        {cute::Int<0>{}, cute::Int<1>{}, cute::Int<0>{}},
-        ({{elem_output_type}}*)(c_ptr) + output_offset,
-        {output_stride, cute::Int<1>{}, cute::Int<0>{}}
-    },
-{% endif %}
-
+    // trailing batch & strides:
     M * K, N * K, N, M * N, K, K, 0, output_stride
 """
 )
@@ -119,21 +95,32 @@ PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
 # for profiler, no need to include TensorAccessor
 PROFILER_PROBLEM_ARGS_TEMPLATE = jinja2.Template(
     """
-    cutlass::gemm::GemmUniversalMode::kGemm,                 // GemmUniversalMode mode
-    cutlass::gemm::GemmCoord{ M, N, K },                    // GemmCoord problem_size
+    cutlass::gemm::GemmCoord{
+        static_cast<coord_t>(M),
+        static_cast<coord_t>(N),
+        static_cast<coord_t>(K)
+    },                                                       // GemmCoord problem_size
+
+    { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },// Epilogue params
     split_k,                                                 // int batch_count
-    {ElementComputeEpilogue(1), ElementComputeEpilogue(1)},  // EpilogueOutputOp::Params
 
-    ({{elem_input_type}}*)(a_ptr),                           // ptr_A
-    ({{elem_input_type}}*)(b_ptr),                           // ptr_B values
+    // ---- pointers block ----
+    ({{elem_input_type}}*)(a_ptr) + input_a_offset,          // ptr_A
+    ({{elem_input_type}}*)(b_ptr) + input_b_offset,          // ptr_B
+    (uint8_t*)(m_ptr),                                       // ptr_B_meta
+    ({{elem_bias_type}}*)(bias_ptr),                         // ptr_bias ← new!
+    ({{elem_output_type}}*)(c_ptr) + output_offset,          // ptr_C (output)
 
-    ({{elem_metadata_type}}*)(metadata_ptr),                  // ptr_B meta
-    metadata_stride,                                         // meta stride
+    // ---- strides block ----
+    input_a_batch_stride,                                    // batch_stride_A
+    input_b_batch_stride,                                    // batch_stride_B
+    metadata_stride,                                         // batch_stride_meta
+    /*output_batch_stride*/ M * N,                           // batch_stride_C
 
-    ({{elem_input_type}}*)(bias_ptr),                        // ptr_C
-    ({{elem_output_type}}*)(c_ptr) + output_offset,          // ptr_D
-
-    M * K, N * K, N, M * N, K, K, 0, output_stride           // batch & strides
+    input_a_stride,                                          // lda
+    input_b_stride,                                          // ldb
+    metadata_stride,                                         // ldm (meta)
+    output_stride                                           // ldc
 """
 )
 
@@ -142,68 +129,39 @@ PROFILER_PROBLEM_ARGS_TEMPLATE = jinja2.Template(
 # column-major bias vector through the bias + elementwise epilogue (not residual)
 PROFILER_PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
     """
-    cutlass::gemm::GemmUniversalMode::kGemm,                     // GemmUniversalMode mode
-{% if has_tma_epilogue %}
     {
-        static_cast<coord_t>(N),
-        static_cast<coord_t>(M),
-        static_cast<coord_t>(K),
-        static_cast<coord_t>(1)
-    },                                                           // ProblemShape problem_shape
+      static_cast<coord_t>(N),
+      static_cast<coord_t>(M),
+      static_cast<coord_t>(K),
+      static_cast<coord_t>(1)
+    },                                                           // ProblemShape
 
-    // B values as A
-    ({{elem_input_type}}*)(b_ptr),                               // ElementA const* ptr_A
-    {K, cute::Int<1>{}, cute::Int<0>{}},                         // StrideA dA
+    // A ← B values
+    ({{elem_input_type}}*)(b_ptr) + input_b_offset,
+    { input_b_batch_stride, cute::Int<1>{}, cute::Int<0>{} },
 
     // B metadata
-    ({{elem_metadata_type}}*)(metadata_ptr),                      // ElementA_meta const* ptr
-    {cute::Int<1>{}, cute::Int<1>{}, cute::Int<0>{}},            // StrideA_meta dA
+    (uint8_t*)(metadata_ptr),
+    { metadata_stride, cute::Int<1>{}, cute::Int<0>{} },
 
-    // A as B
-    ({{elem_input_type}}*)(a_ptr),                               // ElementB const* ptr_B
-    {K, cute::Int<1>{}, cute::Int<0>{}},                         // StrideB dB
+    // bias
+    ({{elem_bias_type}}*)(bias_ptr),                             // ptr_bias ← new!
 
-    // EpilogueArguments (bias-only for TMA)
+    // B ← A values
+    ({{elem_input_type}}*)(a_ptr) + input_a_offset,
+    { input_a_batch_stride, cute::Int<1>{}, cute::Int<0>{} },
+
+    // no C input (we’re fusing into D only), D ← C out
     {
-        {ElementComputeEpilogue(1), ElementComputeEpilogue(1)},  // thread params
-        nullptr,                                                 // ElementC const* ptr_C
-        {cute::Int<1>{}, cute::Int<0>{}, cute::Int<0>{}},        // StrideC dC
-        ({{elem_output_type}}*)(c_ptr) + output_offset,          // ElementD* ptr_D
-        {cute::Int<1>{}, output_stride, cute::Int<0>{}},         // StrideD dD
-        ({{elem_input_type}}*)(bias_ptr)                         // ElementBias const* ptr_Bias
+      { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
+      nullptr,
+      { cute::Int<0>{}, cute::Int<0>{}, cute::Int<0>{} },
+      ({{elem_output_type}}*)(c_ptr) + output_offset,
+      { output_stride, cute::Int<1>{}, cute::Int<0>{} }
     },
 
-{% else %}
-    {
-        static_cast<coord_t>(M),
-        static_cast<coord_t>(N),
-        static_cast<coord_t>(K),
-        static_cast<coord_t>(1)
-    },                                                           // ProblemShape problem_shape
-
-    // A
-    ({{elem_input_type}}*)(a_ptr),                               // ElementA const* ptr_A
-    {K, cute::Int<1>{}, cute::Int<0>{}},                         // StrideA dA
-
-    // B values
-    ({{elem_input_type}}*)(b_ptr),                               // ElementB const* ptr_B
-    {K, cute::Int<1>{}, cute::Int<0>{}},                         // StrideB dB
-
-    // B metadata
-    ({{elem_metadata_type}}*)(metadata_ptr),                      // ElementB_meta const* ptr
-    {cute::Int<1>{}, cute::Int<1>{}, cute::Int<0>{}},            // StrideB_meta dB
-
-    // EpilogueArguments (bias + residual)
-    {
-        {ElementComputeEpilogue(1), ElementComputeEpilogue(1)},  // thread params
-        ({{elem_input_type}}*)(bias_ptr),                        // ElementC const* ptr_C
-        {cute::Int<0>{}, cute::Int<1>{}, cute::Int<0>{}},        // StrideC dC
-        ({{elem_output_type}}*)(c_ptr) + output_offset,          // ElementD* ptr_D
-        {output_stride, cute::Int<1>{}, cute::Int<0>{}}          // StrideD dD
-    },
-{% endif %}
-
-    M * K, N * K, N, M * N, K, K, 0, output_stride                 // batch & strides
+    // trailing batch & strides:
+    M * K, N * K, N, M * N, K, K, 0, output_stride
 """
 )
 

@@ -119,7 +119,7 @@ def reorder_meta(src: torch.Tensor) -> torch.Tensor:
     returns    :  reordered tensor with the same shape
     """
     m_dim, k_dim   = src.shape
-    elem_bytes     = src.element_size()          # 4 for int32, 2 for fp16 meta, …
+    elem_bytes     = src.element_size()
     group          = 32 if elem_bytes == 2 else 16
     interweave     = 4  if elem_bytes == 2 else 2
 
@@ -130,7 +130,6 @@ def reorder_meta(src: torch.Tensor) -> torch.Tensor:
             dest_row =  (m // group) * group + (m % 8) * interweave + (m % group) // 8
             dest_col =  k
 
-            # 2×2 Z‑to‑N block swizzle
             if (dest_row & 1) == 0 and (dest_col & 1) == 1:
                 dest_row += 1
                 dest_col -= 1
@@ -199,8 +198,8 @@ def assign_sparse_buffers(pt_model, ait_model):
             Wc = pt_mod.weight_comp.detach().cpu().numpy()
             Wm = pt_mod.weight_meta.detach().cpu().numpy()
             # shove them into the AIT template Tensors
-            ai_mod.weight_comp.tensor()._attrs["value"] = Wc   # Wc is float16
-            ai_mod.weight_meta.tensor()._attrs["value"] = Wm   # now int32
+            ai_mod.weight_comp.tensor()._attrs["value"] = Wc
+            ai_mod.weight_meta.tensor()._attrs["value"] = Wm
             if ai_mod.use_bias:
                 b = pt_mod.bias.detach().cpu().numpy().astype(np.float16)
                 ai_mod.bias.tensor()._attrs["value"] = b
@@ -219,7 +218,7 @@ def map_all_constants(ait_model):
     return consts
 
     
-def benchmark(batch_size=128, hidden=128):
+def benchmark(batch_size=256, hidden=256):
     # create pytorch model
     pytorch_model = PytorchModel(hidden).cuda().half()
 
@@ -264,8 +263,6 @@ def benchmark(batch_size=128, hidden=128):
     assign_sparse_buffers(pytorch_model, sparse_model)
 
     target = detect_target()
-
-    '''
     dense_consts = map_pt_params(dense_model, pytorch_model)
     with compile_model(
         Y_dense, target, "./tmp", "dense_model", constants=dense_consts
@@ -285,7 +282,6 @@ def benchmark(batch_size=128, hidden=128):
         dense_time, _, _ = dense_module.benchmark_with_tensors(
             dense_inputs, dense_outputs, graph_mode=True, count=count
         )
-    '''
 
     sparse_consts = map_all_constants(sparse_model)
     with compile_model(
@@ -296,10 +292,10 @@ def benchmark(batch_size=128, hidden=128):
         inputs = {"X_sparse": x}
         outputs = {"Y_sparse": y_sparse}
 
-        # for name, arr in sparse_consts.items():
-        #     sparse_module.set_constant(name, arr) 
         sparse_module.run_with_tensors(inputs, outputs, graph_mode=True)
+        y_sparse = y_sparse.T
 
+        print(x)
         print(y_sparse)
         print(y_pytorch)
 
@@ -313,7 +309,7 @@ def benchmark(batch_size=128, hidden=128):
         )
     
     print(f"PyTorch eager time: {pytorch_time} ms/iter")
-    # print(f"Dense model time: {dense_time} ms/iter")
+    print(f"Dense model time: {dense_time} ms/iter")
     print(f"Sparse model time: {sparse_time} ms/iter")
         
 

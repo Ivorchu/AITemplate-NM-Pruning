@@ -34,6 +34,8 @@ from aitemplate.backend.cuda.gemm_universal import (
     gemm_rrr,
     gemm_rrr_bias,
     gemm_rrr_permute,
+    gemm_sparse,
+    gemm_sparse_bias,
     group_gemm_rcr,
     group_gemm_rcr_bias,
     group_gemm_rcr_bias_relu,

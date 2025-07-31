@@ -143,50 +143,6 @@ def reorder_meta(src: torch.Tensor) -> torch.Tensor:
     return dst
 
 
-'''
-def compress_2_to_4(model: torch.nn.Module):
-    for name, module in model.named_modules():
-        if not isinstance(module, torch.nn.Linear):
-            continue
-
-        W = module.weight.data
-        rows, cols = W.shape
-        G = cols // 4
-
-        # allocate
-        Wc = torch.zeros(rows, G * 2, dtype=W.dtype, device=W.device)
-        Wm = torch.zeros(rows,   G, dtype=torch.int32, device=W.device)
-
-        for i in range(rows):
-            comp_vals = []
-            metas     = []
-            for g in range(G):
-                block = W[i, 4*g : 4*(g+1)]
-                nz = (block != 0).nonzero(as_tuple=False).squeeze(1)
-                if nz.numel() != 2:
-                    raise RuntimeError(f"2:4 sparsity violated at row={i}, block={g}")
-                p1, p2 = sorted(nz.tolist())
-                # pack into nibble
-                meta = (p2 << 2) | p1
-                metas.append(meta)
-                # pull the two values in order
-                comp_vals.extend([block[p1].item(), block[p2].item()])
-
-            Wc[i].copy_(torch.tensor(comp_vals, dtype=W.dtype, device=W.device))
-            Wm[i].copy_(torch.tensor(metas,     dtype=torch.int32, device=W.device))
-
-        np_array = Wm.cpu().numpy()
-        np.savetxt("meta.txt", np_array, fmt="%d")
-        #Wm = reorder_meta(Wm, rows, G)
-        Wm = reorder_meta(Wm)
-        np_array = Wm.cpu().numpy()
-        np.savetxt("reorder_meta.txt", np_array, fmt="%d")
-
-        module.register_buffer("weight_comp", Wc)
-        module.register_buffer("weight_meta", Wm)
-'''
-
-
 def compress_2_to_4(model: torch.nn.Module):
     for name, module in model.named_modules():
         if not isinstance(module, torch.nn.Linear):
@@ -308,8 +264,9 @@ def benchmark(batch_size=128, hidden=128):
     assign_sparse_buffers(pytorch_model, sparse_model)
 
     target = detect_target()
+
+    '''
     dense_consts = map_pt_params(dense_model, pytorch_model)
-    
     with compile_model(
         Y_dense, target, "./tmp", "dense_model", constants=dense_consts
     ) as dense_module:
@@ -328,7 +285,7 @@ def benchmark(batch_size=128, hidden=128):
         dense_time, _, _ = dense_module.benchmark_with_tensors(
             dense_inputs, dense_outputs, graph_mode=True, count=count
         )
-    
+    '''
 
     sparse_consts = map_all_constants(sparse_model)
     with compile_model(
@@ -356,9 +313,8 @@ def benchmark(batch_size=128, hidden=128):
         )
     
     print(f"PyTorch eager time: {pytorch_time} ms/iter")
-    print(f"Dense model time: {dense_time} ms/iter")
+    # print(f"Dense model time: {dense_time} ms/iter")
     print(f"Sparse model time: {sparse_time} ms/iter")
         
 
 benchmark()
-

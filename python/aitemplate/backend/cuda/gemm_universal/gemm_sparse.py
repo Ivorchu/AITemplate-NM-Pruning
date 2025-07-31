@@ -27,7 +27,7 @@ ARGS_PARSER_TEMPLATE = jinja2.Template(
   int64_t b_dim0 = N;
   int64_t b_dim1 = K / 2;
   int64_t m_dim0 = N;
-  int64_t m_dim1 = K / 2 / 16;
+  int64_t m_dim1 = K / 8;
   int64_t c_dim0 = M;
   int64_t c_dim1 = N;
 
@@ -68,7 +68,7 @@ PROBLEM_ARGS_TEMPLATE = jinja2.Template(
 
     // 6) ref_E  (the 2:4 metadata)  
     { (ElementE*)(m_ptr),
-    K / 2 / 8 },
+    K / 8 },
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
@@ -131,7 +131,7 @@ PROFILER_PROBLEM_ARGS_TEMPLATE = jinja2.Template(
 
     // 6) ref_E  (the 2:4 metadata)  
     { (ElementE*)(m_ptr),
-    K / 2 / 16 },
+    K / 8 },
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },
@@ -165,7 +165,7 @@ PROFILER_PROBLEM_ARGS_TEMPLATE_CUTLASS_3X = jinja2.Template(
 
     // 6) ref_E  (the 2:4 metadata)  
     { (ElementE*)(m_ptr),
-    K / 2 / 8 },
+    K / 8},
 
     // 7) epilogue  
     { ElementComputeEpilogue(1), ElementComputeEpilogue(0) },

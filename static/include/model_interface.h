@@ -69,6 +69,7 @@ enum class AITemplateDtype {
   kHalf,
   kFloat,
   kInt,
+  kUInt,
   kLong,
   kBool,
   kBFloat16,
@@ -97,6 +98,8 @@ inline size_t AITemplateDtypeSizeBytes(AITemplateDtype dtype) {
     case AITemplateDtype::kFloat:
       return 4;
     case AITemplateDtype::kInt:
+      return 4;
+    case AITemplateDtype::kUInt:
       return 4;
     case AITemplateDtype::kLong:
       return 8;

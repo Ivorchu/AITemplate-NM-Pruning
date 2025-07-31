@@ -24,8 +24,8 @@ class LinearSparse(Module):
             dtype=dtype,
         )
         self.weight_meta = Parameter(
-            shape=[out_channels, in_channels // 2 // 8],
-            dtype="int32",
+            shape=[out_channels, in_channels // 2 // 16],
+            dtype="uint32",
         )
         op_name = "gemm_sparse_bias" if bias else "gemm_sparse"
         if specialization is not None:

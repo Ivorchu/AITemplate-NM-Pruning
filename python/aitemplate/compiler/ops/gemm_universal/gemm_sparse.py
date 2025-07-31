@@ -67,7 +67,7 @@ class gemm_sparse(common.gemm):
         k4 = b_meta._attrs["shape"][-1]
         if not isinstance(ak, IntImm):
             raise RuntimeError(f"K must be static, got {ak}")
-        if 2 * k2 != ak or k4*2*8 != ak:
+        if 2 * k2 != ak or k4*2*16 != ak:
             raise RuntimeError(
                 f"Compressed B shapes must match a. "
                 f"A.k={ak}, Bv.k={k2}, Bm.k={k4}"

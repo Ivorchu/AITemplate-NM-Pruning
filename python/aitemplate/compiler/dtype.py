@@ -26,7 +26,8 @@ _DTYPE2BYTE = {
     "int64": 8,
     "bfloat16": 2,
     "uint8": 1,
-    "uint16":2,
+    "uint16": 2,
+    "uint32": 4,
 }
 
 
@@ -45,6 +46,7 @@ _DTYPE_TO_ENUM = {
     "bool": 5,
     "bfloat16": 6,
     "uint16": 7,
+    "uint32": 8,
 }
 
 
@@ -130,6 +132,8 @@ def dtype_to_enumerator(dtype: str) -> str:
             return "kFloat"
         elif dtype == "int32" or dtype == "int":
             return "kInt"
+        elif dtype == "uint32":
+            return "kUInt"
         elif dtype == "int64":
             return "kLong"
         elif dtype == "bool":

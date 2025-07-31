@@ -29,7 +29,7 @@ from aitemplate.compiler.dtype import dtype_str_to_enum, get_dtype_size, normali
 
 
 def types_mapping():
-    from torch import bfloat16, bool, float16, float32, int32, int64, uint16
+    from torch import bfloat16, bool, float16, float32, int32, int64, uint16, uint32
 
     yield (float16, "float16")
     yield (bfloat16, "bfloat16")
@@ -37,6 +37,7 @@ def types_mapping():
     yield (int32, "int32")
     yield (int64, "int64")
     yield (uint16, "uint16")
+    yield (uint32, "uint32")
     yield (bool, "bool")
 
 

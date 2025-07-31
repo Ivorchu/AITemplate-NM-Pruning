@@ -19,6 +19,12 @@ class LinearSparse(Module):
         if LinearSparse.USE_CUDA is None:
             LinearSparse.USE_CUDA = detect_target().name() == "cuda"
         self.weight = Parameter(shape=[out_channels, in_channels], dtype=dtype)
+        self.weight_comp = Parameter(
+            shape=[out_channels, in_channels // 2], dtype="float16"
+        )
+        self.weight_meta = Parameter(
+            shape=[out_channels, in_channels // 4], dtype="uint8"
+        )
         op_name = "gemm_sparse_bias" if bias else "gemm_sparse"
         if specialization is not None:
             op_name += "_" + specialization
@@ -31,14 +37,23 @@ class LinearSparse(Module):
         self.in_channels = in_channels
 
     def forward(self, *args):
+
         assert len(args) >= 1
         x = args[0]
+
         if not self.USE_CUDA and len(x._attrs["shape"]) != 2:
             x = ops.reshape()(x, [-1, self.in_channels])
-        inputs = [x, self.weight.tensor()]
+
+        # Grab your compressed weight and metadata buffers:
+        comp = self.weight_comp.tensor()   # [out, in//2]
+        meta = self.weight_meta.tensor()   # [out, in//4]
+
+        # Build the op inputs in exactly the order the gemm_sparse op expects:
+        inputs = [x, comp, meta]
+
+        # Finally append bias if you constructed with bias=True
         if self.use_bias:
             inputs.append(self.bias.tensor())
-        if len(args) == 2:
-            inputs.append(args[1])
-        output = self.op(*inputs)
-        return output
+
+        # Call the op
+        return self.op(*inputs)

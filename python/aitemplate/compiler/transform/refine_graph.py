@@ -23,6 +23,8 @@ from aitemplate.compiler.base import Operator, Tensor
 
 from aitemplate.utils.graph_utils import get_sorted_ops
 
+import numpy as np
+
 # pylint: disable=C0103
 
 
@@ -46,8 +48,26 @@ SPECIAL_CHECK_FUNC_KEYS = {
 def same_tensor_type(t1: Tensor, t2: Tensor):
     if t1.dtype() != t2.dtype():
         return False
-    if t1._attrs["value"] != t2._attrs["value"]:
-        return False
+    
+    v1 = t1._attrs.get("value", None)
+    v2 = t2._attrs.get("value", None)
+
+    # both None → OK; one None → different
+    if v1 is None or v2 is None:
+        if v1 is not None or v2 is not None:
+            return False
+    else:
+        # if they’re numpy arrays, do an elementwise‐equality check
+        if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
+            if not np.array_equal(v1, v2):
+                return False
+        else:
+            # fall back to normal equality
+            if v1 != v2:
+                return False
+
+    # if t1._attrs["value"] != t2._attrs["value"]:
+    #     return False
     t1s = t1.shape()
     t2s = t2.shape()
     if len(t1s) != len(t2s):

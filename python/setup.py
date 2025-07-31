@@ -57,7 +57,7 @@ class BinaryDistribution(Distribution):
 # temp copy 3rdparty libs to build dir
 shutil.copytree("../3rdparty", "./aitemplate/3rdparty")
 shutil.copytree("../static", "./aitemplate/static")
-shutil.copytree("../licenses", "./aitemplate/licenses")
+# shutil.copytree("../licenses", "./aitemplate/licenses")
 
 
 def gen_file_list(srcs, f_cond):
@@ -188,4 +188,4 @@ setup(
 # remove temp
 shutil.rmtree("./aitemplate/3rdparty")
 shutil.rmtree("./aitemplate/static")
-shutil.rmtree("./aitemplate/licenses")
+# shutil.rmtree("./aitemplate/licenses")

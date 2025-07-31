@@ -37,6 +37,16 @@ RUN bash /Install/install_test_dep.sh
 RUN bash /Install/install_doc_dep.sh
 
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.9
+RUN apt update && apt install -y software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt update && apt install -y python3.9 python3.9-dev python3.9-distutils && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9
+
+
 # install Pytorch
 RUN pip3 install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu113
 
@@ -56,6 +66,6 @@ ADD ./examples /AITemplate/examples
 ADD ./tests /AITemplate/tests
 ADD ./docs /AITemplate/docs
 ADD ./static /AITemplate/static
-ADD ./licenses /AITemplate/licenses
+# ADD ./licenses /AITemplate/licenses
 ADD ./docker/install/install_ait.sh /AITemplate/
 RUN bash /AITemplate/install_ait.sh

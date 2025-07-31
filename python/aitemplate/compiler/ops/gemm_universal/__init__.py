@@ -40,7 +40,9 @@ from aitemplate.compiler.ops.gemm_universal.bmm_xxx_add import (
     bmm_rrr_add,
 )
 from aitemplate.compiler.ops.gemm_universal.gemm_rcr import gemm_rcr
+from aitemplate.compiler.ops.gemm_universal.gemm_sparse import gemm_sparse
 from aitemplate.compiler.ops.gemm_universal.gemm_rcr_bias import gemm_rcr_bias
+from aitemplate.compiler.ops.gemm_universal.gemm_sparse_bias import gemm_sparse_bias
 from aitemplate.compiler.ops.gemm_universal.gemm_rcr_bias_add import gemm_rcr_bias_add
 from aitemplate.compiler.ops.gemm_universal.gemm_rcr_bias_add_add import (
     gemm_rcr_bias_add_add,

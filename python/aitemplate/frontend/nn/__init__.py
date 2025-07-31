@@ -20,6 +20,7 @@ from aitemplate.frontend.nn.conv1d import *
 from aitemplate.frontend.nn.conv2d import *
 from aitemplate.frontend.nn.conv3d import *
 from aitemplate.frontend.nn.linear import *
+from aitemplate.frontend.nn.linear_sparse import *
 from aitemplate.frontend.nn.padding import *
 from aitemplate.frontend.nn.pool2d import *
 from aitemplate.frontend.nn.fpn_proposal import FPNProposal

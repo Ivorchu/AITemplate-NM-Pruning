@@ -9,7 +9,6 @@ class gemm_sparse(common.gemm):
     def __init__(self):
         super().__init__()
         self._attrs["op"] = "gemm_sparse"
-        self._attrs["has_profiler"] = False
 
         def cal_align_ab(m, n, k):
             return common.default_align_ab(k, k, self._attrs["inputs"][0].dtype())
